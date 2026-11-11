@@ -102,7 +102,14 @@ check_macos() {
         return 1
     fi
 
-    if swift build --package-path "$REPO_ROOT/macos"; then
+    mkdir -p /tmp/clang-module-cache /tmp/swiftpm-module-cache /tmp/swift-module-cache
+    if CLANG_MODULE_CACHE_PATH=/tmp/clang-module-cache \
+       SWIFTPM_MODULECACHE_OVERRIDE=/tmp/swiftpm-module-cache \
+       swift build \
+         --disable-sandbox \
+         --package-path "$REPO_ROOT/macos" \
+         -Xswiftc -module-cache-path -Xswiftc /tmp/swift-module-cache \
+         -Xcc -fmodules-cache-path=/tmp/clang-module-cache; then
         log_ok "swift build passed for macos/"
     else
         log_fail "swift build failed for macos/"
@@ -122,7 +129,14 @@ test_macos() {
         return 1
     fi
 
-    if swift test --package-path "$REPO_ROOT/macos"; then
+    mkdir -p /tmp/clang-module-cache /tmp/swiftpm-module-cache /tmp/swift-module-cache
+    if CLANG_MODULE_CACHE_PATH=/tmp/clang-module-cache \
+       SWIFTPM_MODULECACHE_OVERRIDE=/tmp/swiftpm-module-cache \
+       swift test \
+         --disable-sandbox \
+         --package-path "$REPO_ROOT/macos" \
+         -Xswiftc -module-cache-path -Xswiftc /tmp/swift-module-cache \
+         -Xcc -fmodules-cache-path=/tmp/clang-module-cache; then
         log_ok "swift test passed for macos/"
     else
         log_fail "swift test failed for macos/"
@@ -145,10 +159,10 @@ vendor_status() {
     for v in "${expected[@]}"; do
         if [[ -d "$REPO_ROOT/third_party/$v" ]]; then
             log_ok "Vendored repository found: third_party/$v"
-            ((found++))
+            found=$((found + 1))
         else
             log_warn "Vendored repository pending: third_party/$v"
-            ((missing++))
+            missing=$((missing + 1))
         fi
     done
 
