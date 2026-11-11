@@ -16,8 +16,8 @@ done
 
 # Rust Crates status
 CRATES_EXPECTED=("continuity-core" "continuity-proto" "continuity-wireless" "continuity-usb" "continuity-scrcpy")
-declare -a CRATES_FOUND=()
-declare -a CRATES_MISSING=()
+CRATES_FOUND=()
+CRATES_MISSING=()
 
 for crate in "${CRATES_EXPECTED[@]}"; do
     if [[ -f "crates/$crate/Cargo.toml" ]]; then
@@ -46,8 +46,8 @@ if [[ -f "third_party/MANIFEST.md" ]]; then
 fi
 
 VENDORS_EXPECTED=("NearDrop" "adb_client" "mtp-rs" "scrcpy" "cameraextension" "libASPL" "protocol")
-declare -a VENDORS_FOUND=()
-declare -a VENDORS_MISSING=()
+VENDORS_FOUND=()
+VENDORS_MISSING=()
 
 for v in "${VENDORS_EXPECTED[@]}"; do
     if [[ -d "third_party/$v" ]]; then
@@ -59,23 +59,30 @@ done
 
 # Root files status
 ROOT_FILES=("Cargo.toml" "Makefile" ".gitignore" "README.md" "AGENTS.md" "plan.md")
-declare -a ROOT_PRESENT=()
+ROOT_PRESENT=()
 for f in "${ROOT_FILES[@]}"; do
     if [[ -f "$f" ]]; then
         ROOT_PRESENT+=("$f")
     fi
 done
 
+format_json_array() {
+    if [[ $# -eq 0 ]]; then
+        echo ""
+    else
+        printf '"%s",' "$@" | sed 's/,$//'
+    fi
+}
+
 if $JSON_MODE; then
-    # Output JSON format
     cat <<EOF
 {
   "repository": "$REPO_ROOT",
-  "root_files": [$(printf '"%s",' "${ROOT_PRESENT[@]}" | sed 's/,$//')],
+  "root_files": [$(format_json_array ${ROOT_PRESENT[@]+"${ROOT_PRESENT[@]}"})],
   "crates": {
-    "expected": [$(printf '"%s",' "${CRATES_EXPECTED[@]}" | sed 's/,$//')],
-    "found": [$(printf '"%s",' "${CRATES_FOUND[@]}" | sed 's/,$//')],
-    "missing": [$(printf '"%s",' "${CRATES_MISSING[@]}" | sed 's/,$//')]
+    "expected": [$(format_json_array ${CRATES_EXPECTED[@]+"${CRATES_EXPECTED[@]}"})],
+    "found": [$(format_json_array ${CRATES_FOUND[@]+"${CRATES_FOUND[@]}"})],
+    "missing": [$(format_json_array ${CRATES_MISSING[@]+"${CRATES_MISSING[@]}"})]
   },
   "macos": {
     "package_present": $MACOS_READY
@@ -85,13 +92,12 @@ if $JSON_MODE; then
   },
   "third_party": {
     "manifest_present": $VENDOR_MANIFEST,
-    "found": [$(printf '"%s",' "${VENDORS_FOUND[@]}" | sed 's/,$//')],
-    "missing": [$(printf '"%s",' "${VENDORS_MISSING[@]}" | sed 's/,$//')]
+    "found": [$(format_json_array ${VENDORS_FOUND[@]+"${VENDORS_FOUND[@]}"})],
+    "missing": [$(format_json_array ${VENDORS_MISSING[@]+"${VENDORS_MISSING[@]}"})]
   }
 }
 EOF
 else
-    # Output text format
     echo "=== Mirror Monorepo Status ==="
     echo "Root Directory: $REPO_ROOT"
     echo ""
@@ -105,12 +111,16 @@ else
     done
     echo ""
     echo "[Rust Crates] ${#CRATES_FOUND[@]}/${#CRATES_EXPECTED[@]} present"
-    for c in "${CRATES_FOUND[@]}"; do
-        echo "  + crates/$c"
-    done
-    for c in "${CRATES_MISSING[@]}"; do
-        echo "  - crates/$c (pending)"
-    done
+    if [[ ${#CRATES_FOUND[@]} -gt 0 ]]; then
+        for c in "${CRATES_FOUND[@]}"; do
+            echo "  + crates/$c"
+        done
+    fi
+    if [[ ${#CRATES_MISSING[@]} -gt 0 ]]; then
+        for c in "${CRATES_MISSING[@]}"; do
+            echo "  - crates/$c (pending)"
+        done
+    fi
     echo ""
     echo "[macOS Workspace]"
     if $MACOS_READY; then
@@ -132,10 +142,14 @@ else
     else
         echo "  - third_party/MANIFEST.md (pending)"
     fi
-    for v in "${VENDORS_FOUND[@]}"; do
-        echo "  + third_party/$v"
-    done
-    for v in "${VENDORS_MISSING[@]}"; do
-        echo "  - third_party/$v (pending)"
-    done
+    if [[ ${#VENDORS_FOUND[@]} -gt 0 ]]; then
+        for v in "${VENDORS_FOUND[@]}"; do
+            echo "  + third_party/$v"
+        done
+    fi
+    if [[ ${#VENDORS_MISSING[@]} -gt 0 ]]; then
+        for v in "${VENDORS_MISSING[@]}"; do
+            echo "  - third_party/$v (pending)"
+        done
+    fi
 fi
