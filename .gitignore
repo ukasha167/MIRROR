@@ -1,0 +1,53 @@
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+main
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Xcode and Swift Package Manager
+.build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcuserdatad/
+*.nib
+Package.resolved
+
+# Android and Gradle
+.gradle/
+build/
+**/build/
+local.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+.cxx/
+captures/
+*.hprof
+
+# IDEs and editors
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+*.sublime-project
+*.sublime-workspace
+*.swp
+*~
+
+# Logs and environment
+*.log
+.env
+.env.*
+!.env.example
