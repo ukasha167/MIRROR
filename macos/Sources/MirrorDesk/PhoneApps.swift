@@ -5,6 +5,12 @@ public struct PhoneApp: Equatable, Sendable {
     public var name: String
     public var package: String
     public var isSystem: Bool
+
+    public init(name: String, package: String, isSystem: Bool) {
+        self.name = name
+        self.package = package
+        self.isSystem = isSystem
+    }
 }
 
 /// App list and display commands for desk mode. Android ignores the Home and Recents keys

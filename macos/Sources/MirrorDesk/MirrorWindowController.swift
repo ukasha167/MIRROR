@@ -14,6 +14,10 @@ public final class MirrorWindowController: NSObject, NSWindowDelegate {
     public var onDropFiles: (([URL]) -> Void)?
     /// The stream broke. The owner should look for the phone and call `use(_:)`.
     public var onLost: (() -> Void)?
+    /// Desk launcher: the user asked for an app in its own window.
+    public var onOpenAppWindow: ((PhoneApp) -> Void)?
+    /// Set for a window that shows one app on its own virtual display, with no launcher.
+    public let soloApp: PhoneApp?
 
     private(set) var phone: PhoneEndpoint
     private let adbPath: String
@@ -40,7 +44,8 @@ public final class MirrorWindowController: NSObject, NSWindowDelegate {
     var resizeWork: DispatchWorkItem?
     var launcherObserver: Any?
 
-    public init(phone: PhoneEndpoint, adbPath: String, serverPath: String, mode: MirrorMode) {
+    public init(phone: PhoneEndpoint, adbPath: String, serverPath: String, mode: MirrorMode, app: PhoneApp? = nil) {
+        self.soloApp = app
         self.phone = phone
         self.adbPath = adbPath
         self.serverPath = serverPath
@@ -49,15 +54,16 @@ public final class MirrorWindowController: NSObject, NSWindowDelegate {
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         super.init()
-        window.title = isDesk ? "\(phone.model) desk" : phone.model
+        window.title = app?.name ?? (isDesk ? "\(phone.model) desk" : phone.model)
+        lastApp = app?.package
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.backgroundColor = .black
         window.collectionBehavior = [.fullScreenPrimary]
-        if isDesk { buildDeskContent() } else { buildPhoneContent() }
+        if soloApp != nil || !isDesk { buildPhoneContent() } else { buildDeskContent() }
         connectInput()
         window.addTitlebarAccessoryViewController(NavigationButtons.controller(
-            buttons: NavigationButtons.Button.forMode(desk: isDesk),
+            buttons: app != nil ? [.back] : NavigationButtons.Button.forMode(desk: isDesk),
             action: { [weak self] in self?.send($0) }))
     }
 

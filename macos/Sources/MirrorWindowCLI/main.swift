@@ -5,6 +5,7 @@ import MirrorDesk
 //
 //   swift run mirror-window         panel-off mirror
 //   swift run mirror-window desk    desk mode
+//   swift run mirror-window app <package>   one app on its own display
 //
 // main is synchronous on purpose. NSApplication.run() inside async top-level code blocks the
 // main actor, and the window's session tasks never start.
@@ -37,11 +38,13 @@ let (adbPath, phone, serverPath) = blocking { () async throws -> (String, PhoneE
     return (adb.adbPath, try await PhoneLocator(adb: adb).locate(), server.path)
 }
 
-let mode: MirrorMode = CommandLine.arguments.dropFirst().first == "desk" ? .defaultDesk : .panelOff
+let args = Array(CommandLine.arguments.dropFirst())
+let soloApp = args.first == "app" && args.count > 1 ? PhoneApp(name: args[1], package: args[1], isSystem: false) : nil
+let mode: MirrorMode = args.first == "desk" || soloApp != nil ? .defaultDesk : .panelOff
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let window = MainActor.assumeIsolated {
-    let window = MirrorWindowController(phone: phone, adbPath: adbPath, serverPath: serverPath, mode: mode)
+    let window = MirrorWindowController(phone: phone, adbPath: adbPath, serverPath: serverPath, mode: mode, app: soloApp)
     window.onStatus = { fputs("\($0)\n", stderr) }
     window.onClose = { exit(0) }
     // No menu bar app here, so a lost stream retries on the endpoint it started with.

@@ -11,6 +11,7 @@ final class DeskAppsModel: ObservableObject {
     @Published var launcherShown = true
     @Published var query = ""
     var open: (PhoneApp) -> Void = { _ in }
+    var openWindow: (PhoneApp) -> Void = { _ in }
     private var icons: [String: NSImage] = [:]
     private let recentStore = RecentApps()
 
@@ -101,6 +102,9 @@ struct DeskLauncherView: View {
                             }
                             .buttonStyle(.plain)
                             .help(app.package)
+                            .contextMenu {
+                                Button("Open in New Window") { model.openWindow(app) }
+                            }
                         }
                     }
                     .padding(.horizontal, 20)
@@ -133,6 +137,9 @@ struct DeskDockView: View {
                 Button { model.launch(app) } label: { AppIcon(image: model.icon(app), name: app.name, size: 36) }
                     .buttonStyle(.plain)
                     .help(app.name)
+                    .contextMenu {
+                        Button("Open in New Window") { model.openWindow(app) }
+                    }
             }
             Spacer()
         }

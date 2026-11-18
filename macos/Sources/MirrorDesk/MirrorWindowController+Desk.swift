@@ -32,6 +32,7 @@ extension MirrorWindowController {
         window.contentMinSize = NSSize(width: 480, height: 360)
         addStatusLabel(over: content)
         apps.open = { [weak self] in self?.open($0) }
+        apps.openWindow = { [weak self] in self?.onOpenAppWindow?($0) }
         launcherObserver = apps.$launcherShown.sink { [weak self, weak launcher] shown in
             launcher?.isHidden = !shown
             if !shown, let self { self.window.makeFirstResponder(self.surface) }
@@ -40,6 +41,11 @@ extension MirrorWindowController {
 
     /// 1100 x 688 points of video (16:10) or 70% of the screen, whichever is smaller.
     func sizeDeskWindow() {
+        if soloApp != nil {
+            // Phone-shaped, so the app picks its phone layout (420 dp wide).
+            window.setContentSize(NSSize(width: 420, height: 760))
+            return
+        }
         let screen = (window.screen ?? NSScreen.main)?.visibleFrame.size ?? CGSize(width: 1440, height: 900)
         let width = min(1100, screen.width * 0.7)
         let video = CGSize(width: width.rounded(), height: (width * 10 / 16).rounded())
@@ -57,6 +63,7 @@ extension MirrorWindowController {
     }
 
     func deskSessionStarted() {
+        guard soloApp == nil else { return }
         if apps.apps == nil { loadApps() }
         // A reconnect reopened the last app (`initialPackage`); otherwise the display shows
         // only wallpaper while the phone is locked, so start on the launcher.
@@ -84,6 +91,8 @@ extension MirrorWindowController {
     /// Returns true when desk mode handled the button itself.
     func deskHandles(_ button: NavigationButtons.Button) -> Bool {
         switch button {
+        case .home, .apps where soloApp != nil:
+            return true
         case .home:
             // The Home key is dropped while the phone is locked: start the desktop home (which
             // sends the current app to the background) and show the Mac launcher over it.

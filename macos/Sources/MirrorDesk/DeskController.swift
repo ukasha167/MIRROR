@@ -16,7 +16,11 @@ public final class DeskController: ObservableObject {
         didSet { clipboardEnabled ? startClipboardIfNeeded() : stopClipboard() }
     }
 
-    public enum WindowKind: Hashable, Sendable { case desk, panelOff }
+    public enum WindowKind: Hashable, Sendable {
+        case desk, panelOff
+        /// One phone app on its own virtual display.
+        case app(String)
+    }
 
     /// Seconds between `adb devices` checks. Each check is one short adb process.
     static let refreshInterval: UInt64 = 5
@@ -212,9 +216,23 @@ public final class DeskController: ObservableObject {
             window.close()
             return
         }
+        open(kind, app: nil)
+    }
+
+    /// Opens `app` in its own window, or brings its window to the front.
+    public func openAppWindow(_ app: PhoneApp) {
+        if let window = windows[.app(app.package)] {
+            window.window.makeKeyAndOrderFront(nil)
+            return
+        }
+        open(.app(app.package), app: app)
+    }
+
+    private func open(_ kind: WindowKind, app: PhoneApp?) {
         guard let phone, let server, let adb else { return }
-        let mode: MirrorMode = kind == .desk ? .defaultDesk : .panelOff
-        let window = MirrorWindowController(phone: phone, adbPath: adb.adbPath, serverPath: server.path, mode: mode)
+        let mode: MirrorMode = kind == .panelOff ? .panelOff : .defaultDesk
+        let window = MirrorWindowController(phone: phone, adbPath: adb.adbPath, serverPath: server.path, mode: mode, app: app)
+        window.onOpenAppWindow = { [weak self] in self?.openAppWindow($0) }
         window.onClose = { [weak self] in
             self?.windows[kind] = nil
             self?.openWindows.remove(kind)
