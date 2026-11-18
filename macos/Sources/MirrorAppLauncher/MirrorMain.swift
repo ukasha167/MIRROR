@@ -1,64 +1,59 @@
 import SwiftUI
 import AppKit
-import MirrorApp
+import MirrorDesk
 
+// The old dashboard (MirrorApp target, custom pairing protocol) is no longer launched.
+// ROADMAP.md, "What happens to the old code", tracks whether it gets archived.
 @main
 struct MirrorMainApp: App {
-    @StateObject private var agent = MirrorAppAgent()
+    @StateObject private var desk = DeskController()
+
+    init() {
+        // Menu bar only: no Dock icon, no main window.
+        NSApplication.shared.setActivationPolicy(.accessory)
+    }
 
     var body: some Scene {
-        Window("Mirror Continuity", id: "main-dashboard") {
-            DashboardView(agent: agent)
+        MenuBarExtra("Mirror", systemImage: "iphone.and.arrow.forward") {
+            DeskMenu(desk: desk)
         }
-        .defaultSize(width: 980, height: 720)
-        .windowResizability(.automatic)
+    }
+}
 
-        MenuBarExtra("Mirror Continuity", systemImage: "iphone.and.arrow.forward") {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(agent.isConnected ? agent.deviceName : "Not Connected")
-                        .font(.headline)
-                    Spacer()
-                    if agent.isConnected {
-                        Text("\(agent.batteryPercentage)%")
-                            .font(.caption.monospacedDigit())
-                            .foregroundColor(.secondary)
-                    }
-                }
+/// Phase 1 menu: scrcpy-based desk mode, panel-off mirror, clipboard sync, Quick Share.
+struct DeskMenu: View {
+    @ObservedObject var desk: DeskController
 
-                Divider()
-
-                Button("Open Dashboard") {
-                    NSApp.activate(ignoringOtherApps: true)
-                    for window in NSApp.windows where window.title.contains("Mirror") {
-                        window.makeKeyAndOrderFront(nil)
-                    }
-                }
-
-                Divider()
-
-                Button(agent.isMirroring ? "Stop Mirroring" : "Start Mirroring") {
-                    Task { await agent.toggleScreenMirror() }
-                }
-                .disabled(!agent.isConnected)
-
-                Button(agent.isWebcamActive ? "Stop Camera" : "Start Continuity Camera") {
-                    agent.toggleWebcam()
-                }
-                .disabled(!agent.isConnected)
-
-                Button(agent.isFinderVolumeMounted ? "Unmount Finder Volume" : "Mount in Finder Sidebar") {
-                    agent.toggleFinderVolume()
-                }
-                .disabled(!agent.isConnected)
-
-                Divider()
-
-                Button("Quit Mirror") {
-                    NSApplication.shared.terminate(nil)
-                }
-            }
-            .padding(4)
+    var body: some View {
+        Text(desk.phoneLabel)
+        if desk.phone != nil && desk.status != "Ready" {
+            Text(desk.status).font(.caption)
         }
+
+        Divider()
+
+        Button(desk.openWindows.contains(.desk) ? "Close Desk Mode" : "Open Desk Mode") {
+            desk.toggle(.desk)
+        }
+        .disabled(desk.phone == nil)
+        Button(desk.openWindows.contains(.panelOff) ? "Close Phone Screen" : "Mirror Phone Screen (Panel Off)") {
+            desk.toggle(.panelOff)
+        }
+        .disabled(desk.phone == nil)
+
+        Divider()
+
+        Toggle("Sync Clipboard", isOn: $desk.clipboardEnabled)
+        Button("Open Quick Share Receiver (NearDrop)") {
+            QuickShareLauncher.open()
+        }
+
+        Divider()
+
+        Button("Quit Mirror") {
+            desk.shutdown()
+            NSApplication.shared.terminate(nil)
+        }
+        .keyboardShortcut("q")
     }
 }
