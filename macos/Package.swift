@@ -14,6 +14,8 @@ let package = Package(
         .library(name: "MirrorFSExtension", targets: ["MirrorFSExtension"]),
         .library(name: "NearDropReceiver", targets: ["NearDropReceiver"]),
         .library(name: "MirrorAppLib", targets: ["MirrorApp"]),
+        .library(name: "MirrorDesk", targets: ["MirrorDesk"]),
+        .executable(name: "mirror-desk", targets: ["MirrorDeskCLI"]),
     ],
     dependencies: [],
     targets: [
@@ -43,6 +45,16 @@ let package = Package(
             path: "Sources/NearDropReceiver"
         ),
         .target(
+            name: "MirrorDesk",
+            dependencies: [],
+            path: "Sources/MirrorDesk"
+        ),
+        .executableTarget(
+            name: "MirrorDeskCLI",
+            dependencies: ["MirrorDesk"],
+            path: "Sources/MirrorDeskCLI"
+        ),
+        .target(
             name: "MirrorApp",
             dependencies: [
                 "MirrorCoreBridge",
@@ -56,7 +68,8 @@ let package = Package(
         .executableTarget(
             name: "MirrorAppLauncher",
             dependencies: [
-                "MirrorApp"
+                "MirrorApp",
+                "MirrorDesk"
             ],
             path: "Sources/MirrorAppLauncher"
         ),
@@ -68,7 +81,8 @@ let package = Package(
                 "MirrorWebcamExtension",
                 "MirrorFSExtension",
                 "NearDropReceiver",
-                "MirrorApp"
+                "MirrorApp",
+                "MirrorDesk"
             ],
             path: "Tests/MirrorTests"
         ),
