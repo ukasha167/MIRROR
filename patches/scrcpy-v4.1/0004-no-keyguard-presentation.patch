@@ -1,0 +1,15 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java b/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
+index c6ec81e..4a1bda2 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
++++ b/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
+@@ -213,8 +213,9 @@ public class NewDisplayCapture extends SurfaceCapture {
+ 
+     public void startNew(Surface surface) {
+         try {
++            // No VIRTUAL_DISPLAY_FLAG_PRESENTATION: SystemUI shows its lock screen clock (KeyguardPresentation) on every public
++            // presentation display while the keyguard shows, and that window takes all touches on the desk display.
+             int flags = VIRTUAL_DISPLAY_FLAG_PUBLIC
+-                    | VIRTUAL_DISPLAY_FLAG_PRESENTATION
+                     | VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+                     | VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH
+                     | VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT;
