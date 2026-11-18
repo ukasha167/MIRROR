@@ -2,42 +2,46 @@
 
 Last updated 2026-11-19. Read `ROADMAP.md` first. Phases 1 and 2 are committed; Phase 3 is under way.
 
-## Phase 2 hand test results and fixes
+## Phase 3 hand test results and fixes (2026-11-19)
 
 | Hand test note | Cause | Fix | Checked how |
 | --- | --- | --- | --- |
-| Desk mode: dock and home screen icons gone while locked | Android hides the desktop launcher's icons and taskbar behind the keyguard | Mac-drawn launcher (search, 132 apps with icons) over the video, and a dock of apps opened from the Mac under it. Home shows the launcher. | Screenshot with `isKeyguardShowing=true`: all icons drawn |
-| Desk mode: Apps button did nothing | scrcpy-server deletes its jar at start, so the app list ran against a missing file and returned nothing | Listing pushes its own copy (`mirror-apps.jar`, `cleanup=false`). Patch 0003 adds `app_icons_dir`, which writes each app's icon as a PNG. | Same screenshot |
-| Transfer slows the mirror | adb carries the push and the video over one connection; Wi-Fi push measured 6 MB/s on this network | Push capped at 3 MB/s over Wi-Fi while a mirror is open; Wi-Fi video 8 Mbit/s instead of 16 | `Pacer` unit test only. Needs a hand test. |
-| Plugging in the cable mid-transfer should use it | The push kept its Wi-Fi serial | When the phone moves from Wi-Fi to USB, the file in flight starts again over USB. A failed file is retried once on whatever transport is current. Open windows also move to USB. | Unit tests only |
-| Window got wider with the transfer bar and stayed wide | The bar's text pushed the window's minimum width | Bar removed. Progress is in the menu bar title ("42%") and the menu, with Stop Sending. | Builds; needs a look |
-| Power press ends the mirror | We closed the window on purpose in Phase 2 | First press wakes the phone, turns its panel on, mirror keeps going. Later presses are left alone. | Sleep then wake with `input keyevent`: window stayed open. A real press needs a hand test. |
-| Unplugging the cable ends the mirror | The stream died with the USB transport | Window shows "Reconnecting" and starts a new session over USB or Wi-Fi as soon as the phone is found. Desk mode reopens the last app. | `adb reconnect` mid-session: window stayed open, new session started |
+| Desk: sound plays on the phone | Sessions ran with `audio=false` | Desk and panel-off windows ask for raw PCM (`audio_codec=raw`, 1.5 Mbit/s) and play it with `AVAudioEngine`. Capture mutes the phone's speaker. 60 ms start cushion, 120 ms cap. Solo app windows take no audio. | YouTube on the desk display: the Mac read frames at the rate the phone sent them. Not listened to. |
+| Desk: lock screen clock covers the desk and takes every touch | SystemUI shows `KeyguardPresentation` on every public presentation display while the keyguard shows. scrcpy sets `VIRTUAL_DISPLAY_FLAG_PRESENTATION`. | Patch 0004 drops the flag | Display now lacks `FLAG_PRESENTATION`. The unlock-then-lock case needs a hand test (PIN). |
+| Desk: Overview button does nothing | Android has no Recents screen on a virtual display; `KEYCODE_APP_SWITCH` on it does nothing | Recents button (Cmd+S) opens a Mac-drawn Overview: apps on the desk display from `dumpsys activity activities`, click to switch, x closes with `am stack remove` | Screenshot with Clock and Calculator open |
+| Desk: after a resize, taps land off | `MirrorMetalNSView.layout()` set its own backing layer's frame to `bounds`, which moved the video one dock height (54 pt) down | Line removed; AppKit owns that frame | `pointer_location` on, injected tap at 25%/25% after a resize: the crosshair now sits where the Mac maps it |
+| Open in New Window: app not usable | Android's status bar and taskbar sat over the app's bottom tabs | Solo app displays use `vd_system_decorations=false`. All desk displays use `display_ime_policy=local`, so the keyboard opens there. | Clock in its own window: tabs visible |
+| Transfer starts again when the transport changes | adb sync cannot write at an offset, and adbd deletes an unfinished file | `AdbResumablePush`: 32 MiB segments over sync, each spliced into a hidden partial file with a positional `dd`, renamed when complete. A switch repeats at most one segment. | Stopped a Wi-Fi push at 45%, resumed over USB at 42%: md5 matches. USB speed 25 MB/s (plain sync 33 MB/s; `exec:` into dd 12 MB/s). |
+| Whole file name in the menu; menu bar title changes width | Full name in the menu line; percentage text of 1 to 3 digits | Names cut to 32 characters in the middle. Badge padded with figure spaces and drawn with tabular digits. | Unit tests. Needs a look. |
+| Stop Sending hangs | The push thread was blocked in a socket write on a slow link, and the menu waited for it | Stop reports at once, shuts the socket down (`shutdown(2)`), and deletes the partial file | Unit test. Needs a hand test. |
 
-Desk mode now sizes the virtual display from the window: 1.5 phone pixels per Mac point at 240 dpi, so one dp is one Mac point. A 1008 x 630 point window gave a 1512 x 944 display.
-
-`swift test` in `macos/`: 76 tests pass.
+`swift test` in `macos/`: 89 tests pass. Rebuild the server (`make scrcpy-server`) and restart the menu bar app to pick up all of this.
 
 ## New tools
 
 - `mirror-window app <package>`: one app in its own window.
+- `mirror-desk push <file>` uses the resumable push. `MIRROR_SERIAL` picks a transport, `MIRROR_STOP_AT=<percent>` stops partway.
 - `make scrcpy-server` now applies patch 0003 (app icons). The built server is in `build/`.
 
 ## Hand checks to do
 
-1. Desk mode with the phone locked: launcher, search (type then Return), dock, Home, right-click "Open in New Window".
-2. Drag the desk window's corner. The phone apps should re-layout to the new size about 150 ms after you stop.
-3. Pinch in Google Maps or Photos.
-4. Panel-off mirror, press the power key once: phone lights up, Mac window keeps mirroring.
-5. Start a 1 GB drop over Wi-Fi with a mirror open: is the video smooth? Plug the cable in mid-way: the menu should switch to "over USB" and finish fast.
-6. Pull the cable during a USB mirror: "Reconnecting", then video over Wi-Fi.
+1. Desk mode: play a video. Sound on the Mac, phone speaker quiet. Is the lag acceptable over Wi-Fi?
+2. Desk mode open, unlock the phone, use it, lock it. The desk should stay usable (no clock).
+3. Recents button (or Cmd+S) in desk mode with two apps open: switch, then close one.
+4. Drag the desk window's corner, then tap small targets near the bottom.
+5. Right-click an app, Open in New Window: whole app visible, typing works.
+6. Send a 1 GB file over Wi-Fi, plug the cable in at 30%: the menu should continue from about 30% over USB. Pull the cable: it should continue over Wi-Fi.
+7. Stop Sending mid-file: the menu says "Stopped" at once.
 
 ## Things learned
 
 - scrcpy-server unlinks its own jar at start unless `cleanup=false`.
 - `flex_display=true` plus `RESIZE_DISPLAY` (type 21, two big-endian u16) resizes a virtual display live.
 - `screencapture -l <window id>` captures a window on another Space; the window id comes from `CGWindowListCopyWindowInfo`.
-- Scripted window resizing needs Accessibility permission, which this terminal lacks.
+- Scripted window resizing needs Accessibility permission, which this terminal lacks. A test can resize its own window instead.
+- `settings put system pointer_location 1` draws touches on the virtual display too, which shows where an injected tap lands.
+- An NSView must not set its own backing layer's frame.
+- Toybox `dd` supports `seek=`, `conv=notrunc` and `oflag=seek_bytes`.
 
 ## Next
 

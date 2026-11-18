@@ -83,6 +83,7 @@ Started 2026-11-19 together with the fixes from the Phase 2 hand test (see HANDO
 | Pinch to zoom | done, needs a hand test |
 | One Mac window per phone app on its own virtual display | done |
 | Resize the desk virtual display with the window | done, needs a hand test |
+| Phase 3 hand test fixes: Mac audio, lock screen clock, desk Overview, resize taps, solo app bars, resumable transfers (see HANDOFF.md) | done, needs a hand test |
 | Android companion app: one-time `pm grant ... WRITE_SECURE_SETTINGS`, then it turns on wireless debugging on approved networks after a reboot | not started |
 | Quick Settings tile on the phone: "Use on Mac" | not started |
 
