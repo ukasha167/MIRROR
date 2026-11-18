@@ -2,7 +2,7 @@
 target/
 **/*.rs.bk
 *.pdb
-main
+/main
 
 # macOS system files
 .DS_Store

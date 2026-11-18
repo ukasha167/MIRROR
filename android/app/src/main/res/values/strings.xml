@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Continuity Mirror</string>
+    <string name="share_target_label">Send to Mac</string>
+    <string name="quick_settings_tile_label">Mirror Continuity</string>
+    <string name="paired_mac">Paired Mac</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_idle">Idle (Low Power)</string>
+    <string name="status_transferring">Transferring</string>
+</resources>
