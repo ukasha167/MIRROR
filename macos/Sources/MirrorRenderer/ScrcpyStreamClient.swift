@@ -29,6 +29,7 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
     private var serverStderrBuffer = Data()
     private var videoConnection: NWConnection?
     private var controlConnection: NWConnection?
+    private var audioStream: ScrcpyAudioStream?
     private var demuxer: ScrcpyV4StreamDemuxer?
     private var decoder: VideoToolboxDecoder?
     private var negotiatedCodec: VideoCodec = .h265
@@ -44,10 +45,14 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
         public var videoBitRate = 8_000_000
         /// Extra `key=value` server arguments, such as `new_display=1600x1000/200`.
         public var extraArguments: [String] = []
-        public init(serverPath: String? = nil, videoBitRate: Int = 8_000_000, extraArguments: [String] = []) {
+        /// Phone audio played on the Mac as raw PCM (1.5 Mbit/s). The phone's speaker goes quiet
+        /// while the session captures it.
+        public var audio = false
+        public init(serverPath: String? = nil, videoBitRate: Int = 8_000_000, extraArguments: [String] = [], audio: Bool = false) {
             self.serverPath = serverPath
             self.videoBitRate = videoBitRate
             self.extraArguments = extraArguments
+            self.audio = audio
         }
     }
 
@@ -89,9 +94,10 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
 
     /// Tears down video/control sockets, terminates the remote server process, and removes `adb forward`.
     public func stop() {
-        let (proc, video, control, serial, adb, port) = stateLock.withLock {
+        let (proc, video, control, serial, adb, port, audio) = stateLock.withLock {
             activeSessionID = nil
-            let s = (serverProcess, videoConnection, controlConnection, activeSerial, activeAdbPath, forwardedPort)
+            let s = (serverProcess, videoConnection, controlConnection, activeSerial, activeAdbPath, forwardedPort, audioStream)
+            audioStream = nil
             serverProcess = nil
             videoConnection = nil
             controlConnection = nil
@@ -107,6 +113,7 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
 
         video?.cancel()
         control?.cancel()
+        audio?.stop()
         if let proc, proc.isRunning { proc.terminate() }
         if let adb, let serial, let port {
             DispatchQueue.global(qos: .utility).async {
@@ -156,17 +163,27 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
 
         do {
             let (videoConn, firstData) = try await connectVideoWithDummyRetry(port: localPort, sessionID: sessionID, proc: proc)
+            // The server accepts its sockets in order: video, audio, control.
+            var audio: ScrcpyAudioStream?
+            if options.audio {
+                let audioConn = try await ScrcpyAdbTransport.connectLoopback(port: localPort, queue: ioQueue)
+                audio = ScrcpyAudioStream(connection: audioConn)
+                audio?.onLog = { [weak self] in self?.onServerLog?("[mirror] \($0)\n") }
+            }
             let controlConn = try await ScrcpyAdbTransport.connectLoopback(port: localPort, queue: ioQueue)
 
             stateLock.withLock {
                 guard activeSessionID == sessionID else {
                     videoConn.cancel()
                     controlConn.cancel()
+                    audio?.stop()
                     return
                 }
                 videoConnection = videoConn
                 controlConnection = controlConn
+                audioStream = audio
             }
+            audio?.start(firstData: nil)
 
             ioQueue.async { [weak self] in
                 guard let self else { return }
@@ -200,11 +217,11 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
         let remoteArgs = [
             "CLASSPATH=/data/local/tmp/scrcpy-server.jar",
             "app_process", "/", "com.genymobile.scrcpy.Server", Self.serverProtocolVersion,
-            "scid=\(scidHex)", "tunnel_forward=true", "video=true", "audio=false", "control=true",
+            "scid=\(scidHex)", "tunnel_forward=true", "video=true", "audio=\(options.audio)", "control=true",
             "video_codec=\(codec == .h265 ? "h265" : "h264")", "max_size=\(maxSize)", "max_fps=\(maxFps)",
             "video_bit_rate=\(options.videoBitRate)", "send_dummy_byte=true", "send_device_meta=true",
             "send_frame_meta=true", "send_stream_meta=true"
-        ] + options.extraArguments
+        ] + (options.audio ? ["audio_codec=raw"] : []) + options.extraArguments
         proc.arguments = ["-s", serial, "shell"] + remoteArgs
 
         let stderrPipe = Pipe()
