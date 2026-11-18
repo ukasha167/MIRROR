@@ -40,27 +40,16 @@ enum NavigationButtons {
         }
 
         /// Desk mode: the phone is locked, so Recents and the notification shade do nothing
-        /// there, and the Apps menu replaces the hidden launcher icons.
+        /// there. Apps opens the Mac-drawn launcher; its dock stands in for Recents.
         static func forMode(desk: Bool) -> [Button] {
             desk ? [.back, .home, .apps] : [.back, .home, .recents, .notifications]
         }
     }
 
     @MainActor
-    static func controller(
-        buttons: [Button],
-        action: @escaping (Button) -> Void,
-        appsMenu: @escaping () -> NSMenu
-    ) -> NSTitlebarAccessoryViewController {
+    static func controller(buttons: [Button], action: @escaping (Button) -> Void) -> NSTitlebarAccessoryViewController {
         let views = buttons.map { button -> NSButton in
-            let view = ClosureButton { sender in
-                if button == .apps {
-                    let menu = appsMenu()
-                    menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY + 4), in: sender)
-                } else {
-                    action(button)
-                }
-            }
+            let view = ClosureButton { _ in action(button) }
             view.image = NSImage(systemSymbolName: button.symbol, accessibilityDescription: button.label)
             view.bezelStyle = .texturedRounded
             view.isBordered = false
@@ -81,29 +70,6 @@ enum NavigationButtons {
         controller.layoutAttribute = .trailing
         return controller
     }
-
-    /// Recently opened apps first, then every app by name.
-    @MainActor
-    static func appsMenu(apps: [PhoneApp]?, recent: [String], open: @escaping (PhoneApp) -> Void) -> NSMenu {
-        let menu = NSMenu()
-        guard let apps else {
-            menu.addItem(withTitle: "Loading apps...", action: nil, keyEquivalent: "")
-            return menu
-        }
-        let byPackage = Dictionary(apps.map { ($0.package, $0) }, uniquingKeysWith: { a, _ in a })
-        let recentApps = recent.compactMap { byPackage[$0] }
-        func add(_ app: PhoneApp) {
-            menu.addItem(ClosureMenuItem(title: app.name) { open(app) })
-        }
-        if !recentApps.isEmpty {
-            menu.addItem(.sectionHeader(title: "Recent"))
-            recentApps.forEach(add)
-            menu.addItem(.separator())
-            menu.addItem(.sectionHeader(title: "All apps"))
-        }
-        apps.forEach(add)
-        return menu
-    }
 }
 
 private final class ClosureButton: NSButton {
@@ -119,18 +85,4 @@ private final class ClosureButton: NSButton {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     @objc private func fire() { handler(self) }
-}
-
-private final class ClosureMenuItem: NSMenuItem {
-    private let handler: () -> Void
-
-    init(title: String, handler: @escaping () -> Void) {
-        self.handler = handler
-        super.init(title: title, action: #selector(fire), keyEquivalent: "")
-        target = self
-    }
-
-    required init(coder: NSCoder) { fatalError("not used") }
-
-    @objc private func fire() { handler() }
 }

@@ -1,7 +1,6 @@
 import Foundation
 
-/// Sends dropped files to the phone one at a time and reports progress for the window's
-/// transfer bar.
+/// Sends dropped files to the phone one at a time and reports progress for the menu bar.
 @MainActor
 public final class FileDropQueue {
     public struct Status: Equatable, Sendable {
@@ -22,18 +21,22 @@ public final class FileDropQueue {
     }
 
     public var onEvent: ((Event) -> Void)?
+    /// Called before the one automatic retry of a failed file, so the owner can look for the
+    /// phone on another transport.
+    public var onRetry: (() -> Void)?
+    public var retryDelay: TimeInterval = 3
+    private var retried: URL?
 
     private let push: @Sendable (URL, @escaping AdbSyncPush.Progress) throws -> String
     private var pending: [URL] = []
     private var running = false
     private var cancel = CancelFlag()
+    private var current: URL?
+    /// Set when the file in flight should start again on a new transport (USB plugged in).
+    private var restart = false
     /// Id of the file in flight. Progress tasks for an older file are dropped, since one can
     /// reach the main actor after that file's `finished` event.
     private var currentID = 0
-
-    public convenience init(serial: String) {
-        self.init { url, progress in try AdbSyncPush(serial: serial).push(url, progress: progress) }
-    }
 
     /// `push` runs off the main thread; tests pass a fake.
     public init(push: @escaping @Sendable (URL, @escaping AdbSyncPush.Progress) throws -> String) {
@@ -48,6 +51,19 @@ public final class FileDropQueue {
     /// Stops the current file (adbd drops the partial copy) and clears the queue.
     public func cancelAll() {
         pending.removeAll()
+        restart = false
+        cancel.set()
+    }
+
+    /// Whether a file is in flight.
+    public var isSending: Bool { current != nil }
+
+    /// Stops the file in flight and sends it again from the start. The push reads its target
+    /// when it starts, so the new copy goes over whatever transport is current then. adbd
+    /// drops the partial copy of the first attempt.
+    public func restartCurrent() {
+        guard current != nil else { return }
+        restart = true
         cancel.set()
     }
 
@@ -59,6 +75,7 @@ public final class FileDropQueue {
         }
         running = true
         let url = pending.removeFirst()
+        current = url
         let name = url.lastPathComponent
         let queued = pending.count
         let push = self.push
@@ -84,11 +101,31 @@ public final class FileDropQueue {
             await MainActor.run {
                 guard let self else { return }
                 self.currentID += 1
+                self.current = nil
                 switch result {
                 case .success(let remote): self.onEvent?(.finished(fileName: name, remotePath: remote))
+                case .failure(is CancellationError) where self.restart:
+                    self.restart = false
+                    self.pending.insert(url, at: 0)
                 case .failure(is CancellationError): break
+                case .failure where self.restart:
+                    // The old transport died mid-write (cable pulled): send again on the new one.
+                    self.restart = false
+                    self.pending.insert(url, at: 0)
+                case .failure where self.retried != url:
+                    // Most failures mid-file are a lost transport (cable pulled, Wi-Fi dropped).
+                    // Try once more after the controller has had time to find the phone again.
+                    self.retried = url
+                    self.onRetry?()
+                    self.pending.insert(url, at: 0)
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: UInt64(self.retryDelay * 1_000_000_000))
+                        self.next()
+                    }
+                    return
                 case .failure(let error): self.onEvent?(.failed(fileName: name, message: "\(error)"))
                 }
+                if case .success = result { self.retried = nil }
                 self.next()
             }
         }

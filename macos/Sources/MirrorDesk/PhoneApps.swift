@@ -34,13 +34,39 @@ public enum PhoneApps {
         return Int(match[open.upperBound...].dropLast())
     }
 
-    /// Lists apps with the server jar the mirror session already pushed (about 1.5 s on a Pixel 7 Pro).
-    public static func load(adb: String, serial: String, serverVersion: String = "4.1") async throws -> [PhoneApp] {
-        let out = try await ProcessCommandRunner().run(adb, [
-            "-s", serial, "shell", "CLASSPATH=/data/local/tmp/scrcpy-server.jar",
-            "app_process", "/", "com.genymobile.scrcpy.Server", serverVersion, "list_apps=true",
-        ])
+    /// The list command's own copy of the server. The mirror session's server deletes its jar
+    /// when it starts, so listing with that path failed and left the Apps menu empty (Phase 2
+    /// hand test). `cleanup=false` stops this run from deleting its copy too.
+    public static let listJar = "/data/local/tmp/mirror-apps.jar"
+    public static let remoteIconDir = "/data/local/tmp/mirror-icons"
+
+    /// Where pulled icons live on the Mac: `<cache>/<package>.png`.
+    public static let iconCache: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Mirror/mirror-icons", isDirectory: true)
+
+    public static func listArguments(serial: String, serverVersion: String = "4.1") -> [String] {
+        ["-s", serial, "shell", "CLASSPATH=\(listJar)", "app_process", "/", "com.genymobile.scrcpy.Server",
+         serverVersion, "list_apps=true", "cleanup=false", "app_icons_dir=\(remoteIconDir)"]
+    }
+
+    /// Lists apps and pulls their icons (needs the app-icons server patch). About 3 s and 1 MB
+    /// for 130 apps on a Pixel 7 Pro. Icons that fail to pull leave the app without one.
+    public static func load(adb: String, serial: String, serverPath: String) async throws -> [PhoneApp] {
+        let run = ProcessCommandRunner()
+        _ = try await run.run(adb, ["-s", serial, "push", serverPath, listJar])
+        let out = try await run.run(adb, listArguments(serial: serial))
+        let parent = iconCache.deletingLastPathComponent()
+        try? FileManager.default.removeItem(at: iconCache)
+        try? FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        _ = try? await run.run(adb, ["-s", serial, "pull", remoteIconDir, parent.path])
+        _ = try? await run.run(adb, ["-s", serial, "shell", "rm", "-rf", remoteIconDir])
         return parse(out.stdout)
+    }
+
+    /// The app's icon pulled by `load`, if any.
+    public static func icon(for package: String) -> URL? {
+        let url = iconCache.appendingPathComponent("\(package).png")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     /// Brings the desktop home screen to the front of `displayId`.

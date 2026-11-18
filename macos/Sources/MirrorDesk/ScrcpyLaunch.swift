@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// How the phone appears on the Mac.
 public enum MirrorMode: Equatable, Sendable {
@@ -8,7 +9,28 @@ public enum MirrorMode: Equatable, Sendable {
     /// The phone's own screen, with the phone's panel turned off. The phone must stay unlocked.
     case panelOff
 
-    public static let defaultDesk = MirrorMode.desk(width: 1600, height: 1000, dpi: 200)
+    public static let defaultDesk = MirrorMode.desk(width: 1600, height: 1000, dpi: deskDpi)
+
+    /// Desk mode draws 1.5 phone pixels per Mac point at 240 dpi, so one Android dp is one
+    /// Mac point: text on the virtual display is the size of Mac text.
+    public static let deskDpi = 240
+    public static let deskPixelsPerPoint: CGFloat = 1.5
+    /// Longest virtual display side. Larger sizes cost encoder time for little sharpness.
+    public static let deskMaxSide = 2560
+
+    /// Virtual display size for a video area of `points`, in even pixel counts (the encoder
+    /// wants even sizes).
+    public static func deskPixels(forPoints points: CGSize) -> (width: Int, height: Int) {
+        var w = points.width * deskPixelsPerPoint
+        var h = points.height * deskPixelsPerPoint
+        let longest = max(w, h)
+        if longest > CGFloat(deskMaxSide) {
+            w *= CGFloat(deskMaxSide) / longest
+            h *= CGFloat(deskMaxSide) / longest
+        }
+        func even(_ v: CGFloat) -> Int { max(320, Int(v) & ~1) }
+        return (even(w), even(h))
+    }
 }
 
 /// Our patched scrcpy-server and the version it was built for.

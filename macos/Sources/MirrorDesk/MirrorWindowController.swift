@@ -2,92 +2,125 @@ import AppKit
 import MirrorRenderer
 
 /// One native mirror window: video, input, Android navigation buttons and file drop.
+///
+/// The window stays open until the user closes it. When the stream breaks (cable pulled,
+/// Wi-Fi drop, phone restart) it shows "Reconnecting" and starts a new session as soon as the
+/// controller hands it an endpoint through `use(_:)`, over USB or Wi-Fi.
 @MainActor
 public final class MirrorWindowController: NSObject, NSWindowDelegate {
     public let mode: MirrorMode
     public var onClose: (() -> Void)?
     public var onStatus: ((String) -> Void)?
+    public var onDropFiles: (([URL]) -> Void)?
+    /// The stream broke. The owner should look for the phone and call `use(_:)`.
+    public var onLost: (() -> Void)?
 
-    private let phone: PhoneEndpoint
+    private(set) var phone: PhoneEndpoint
     private let adbPath: String
-    private let config: NativeMirrorConfig
-    private let client = ScrcpyStreamClient()
+    let serverPath: String
+    let client = ScrcpyStreamClient()
     private let sink = MirrorFrameSink()
-    private let surface = MirrorMetalNSView()
-    private let transferBar = TransferBar()
-    private let files: FileDropQueue
+    let surface = MirrorMetalNSView()
+    private let statusLabel = NSTextField(labelWithString: "")
+    let window: NSWindow
     private var powerWatcher: PowerKeyWatcher?
-    /// Desk mode only: the virtual display's id (from the server log) and the phone's apps.
-    private var displayID: Int?
-    private var apps: [PhoneApp]?
-    private let recentApps = RecentApps()
-    private let window: NSWindow
+    private enum Link { case connecting, streaming, lost }
+    private var link = Link.connecting
+    private var closing = false
+    private var retryTask: Task<Void, Never>?
+    /// Panel-off mode: true until the user presses the phone's power key. Then the phone's
+    /// panel stays on, including after a reconnect.
+    private var panelOffWanted = true
+
+    // Desk mode state (see MirrorWindowController+Desk.swift).
+    let apps = DeskAppsModel()
+    var displayID: Int?
+    /// The app last opened on the virtual display, reopened after a reconnect.
+    var lastApp: String?
+    var resizeWork: DispatchWorkItem?
+    var launcherObserver: Any?
 
     public init(phone: PhoneEndpoint, adbPath: String, serverPath: String, mode: MirrorMode) {
         self.phone = phone
         self.adbPath = adbPath
+        self.serverPath = serverPath
         self.mode = mode
-        self.config = NativeMirrorConfig(mode: mode, serverPath: serverPath)
-        self.files = FileDropQueue(serial: phone.serial)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 800),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         super.init()
-        window.title = mode == .panelOff ? phone.model : "\(phone.model) desk"
+        window.title = isDesk ? "\(phone.model) desk" : phone.model
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.backgroundColor = .black
         window.collectionBehavior = [.fullScreenPrimary]
-        buildContent()
+        if isDesk { buildDeskContent() } else { buildPhoneContent() }
+        connectInput()
         window.addTitlebarAccessoryViewController(NavigationButtons.controller(
-            buttons: NavigationButtons.Button.forMode(desk: mode != .panelOff),
-            action: { [weak self] in self?.send($0) },
-            appsMenu: { [weak self] in
-                guard let self else { return NSMenu() }
-                return NavigationButtons.appsMenu(apps: self.apps, recent: self.recentApps.packages) { [weak self] in
-                    self?.open($0)
-                }
-            }))
+            buttons: NavigationButtons.Button.forMode(desk: isDesk),
+            action: { [weak self] in self?.send($0) }))
     }
 
+    var isDesk: Bool { mode != .panelOff }
+
     public func show() {
-        if case .desk(let w, let h, _) = mode { fit(CGSize(width: w, height: h)) }
+        if isDesk { sizeDeskWindow() }
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
-        start()
+        startSession()
     }
 
     public func close() { window.close() }
 
-    // MARK: - Setup
+    /// The controller found the phone. Starts a session when the stream is down or the phone
+    /// moved to another transport (USB plugged in: switch to the faster cable).
+    public func use(_ endpoint: PhoneEndpoint) {
+        guard !closing else { return }
+        guard endpoint.serial != phone.serial || link == .lost else { return }
+        phone = endpoint
+        startSession()
+    }
 
-    private func buildContent() {
+    // MARK: - Layout
+
+    private func buildPhoneContent() {
         let content = NSView()
-        surface.translatesAutoresizingMaskIntoConstraints = false
-        transferBar.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(surface)
-        content.addSubview(transferBar)
-        NSLayoutConstraint.activate([
-            surface.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            surface.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            surface.topAnchor.constraint(equalTo: content.topAnchor),
-            surface.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            transferBar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            transferBar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            transferBar.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            transferBar.heightAnchor.constraint(equalToConstant: TransferBar.height),
-        ])
+        pin(surface, in: content)
         window.contentView = content
+        addStatusLabel(over: content)
+    }
+
+    func pin(_ view: NSView, in parent: NSView) {
+        view.translatesAutoresizingMaskIntoConstraints = false
+        parent.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
+            view.topAnchor.constraint(equalTo: parent.topAnchor),
+            view.bottomAnchor.constraint(equalTo: parent.bottomAnchor),
+        ])
+    }
+
+    func addStatusLabel(over parent: NSView) {
+        statusLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        statusLabel.textColor = .white
+        statusLabel.alignment = .center
+        statusLabel.isHidden = true
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        parent.addSubview(statusLabel)
+        NSLayoutConstraint.activate([
+            statusLabel.centerXAnchor.constraint(equalTo: surface.centerXAnchor),
+            statusLabel.centerYAnchor.constraint(equalTo: surface.centerYAnchor),
+            statusLabel.widthAnchor.constraint(lessThanOrEqualTo: surface.widthAnchor, constant: -40),
+        ])
+    }
+
+    private func connectInput() {
         sink.attach(pipeline: surface.renderPipeline)
         let client = self.client
         surface.onControl = { client.sendControl($0) }
-        surface.onDropFiles = { [weak self] urls in self?.files.enqueue(urls) }
-        files.onEvent = { [weak self] in self?.transferBar.show($0) }
-        transferBar.onStop = { [weak self] in self?.files.cancelAll() }
-    }
-
-    private func start() {
+        surface.onDropFiles = { [weak self] urls in self?.onDropFiles?(urls) }
         let sink = self.sink
         client.onPixelBuffer = { buffer, _ in sink.submit(pixelBuffer: buffer) }
         client.onVideoDimensionsChanged = { [weak self] size in
@@ -96,43 +129,87 @@ public final class MirrorWindowController: NSObject, NSWindowDelegate {
         client.onStateChanged = { [weak self] state in
             Task { @MainActor in self?.stateChanged(state) }
         }
-        if mode != .panelOff {
+    }
+
+    // MARK: - Session
+
+    private func startSession() {
+        retryTask?.cancel()
+        retryTask = nil
+        link = .connecting
+        showStatus("Connecting over \(phone.transport == .usb ? "USB" : "Wi-Fi")...")
+        let config = NativeMirrorConfig(mode: currentMode, serverPath: serverPath, transport: phone.transport)
+        if isDesk {
+            displayID = nil
             let log = LogScanner()
             client.onServerLog = { [weak self] chunk in
                 guard let id = log.virtualDisplayID(after: chunk) else { return }
                 Task { @MainActor in self?.displayID = id }
             }
         }
-        let (client, phone, adbPath, config) = (self.client, self.phone, self.adbPath, self.config)
+        let (client, phone, adbPath, reopen) = (self.client, self.phone, self.adbPath, isDesk ? lastApp : nil)
         Task {
             do {
                 try await client.start(serial: phone.serial, adbPath: adbPath, maxSize: config.maxSize,
-                                       maxFps: NativeMirrorConfig.maxFps, options: config.streamOptions)
+                                       maxFps: NativeMirrorConfig.maxFps, initialPackage: reopen,
+                                       options: config.streamOptions)
             } catch {
-                onStatus?("Mirror failed: \(error)")
-                close()
+                lost("\(error)")
             }
         }
         if config.turnsPanelOff { watchPowerKey() }
     }
 
     private func stateChanged(_ state: ScrcpyStreamClient.StreamState) {
+        guard !closing else { return }
         switch state {
         case .streaming:
-            if config.turnsPanelOff { client.sendControl(ScrcpyControlEncoder.setDisplayPower(on: false)) }
-            if mode != .panelOff, apps == nil { loadApps() }
+            if link != .streaming { sessionStarted() }
         case .failed(let message):
-            onStatus?("Mirror stopped: \(message.split(separator: "\n").last ?? "")")
-            close()
+            lost(String(message.split(separator: "\n").last ?? ""))
         case .idle, .starting:
             break
         }
     }
 
+    private func sessionStarted() {
+        link = .streaming
+        showStatus(nil)
+        if mode == .panelOff, panelOffWanted {
+            client.sendControl(ScrcpyControlEncoder.setDisplayPower(on: false))
+        }
+        if isDesk { deskSessionStarted() }
+    }
+
+    /// Keeps the window and tries again every 3 s until a session starts or the window closes.
+    private func lost(_ reason: String) {
+        guard !closing, link != .lost else { return }
+        link = .lost
+        powerWatcher?.stop()
+        powerWatcher = nil
+        client.stop()
+        showStatus("Phone disconnected. Reconnecting...")
+        onStatus?("Mirror lost the phone: \(reason)")
+        retryTask = Task { [weak self] in
+            // Give adb a second to drop the dead transport, then ask every 3 s.
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            while !Task.isCancelled {
+                self?.onLost?()
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+        }
+    }
+
+    private func showStatus(_ text: String?) {
+        statusLabel.stringValue = text ?? ""
+        statusLabel.isHidden = text == nil
+    }
+
     private func videoSizeChanged(_ size: CGSize) {
         let first = surface.videoSize == .zero
         surface.videoSize = size
-        if first || window.contentAspectRatio != size { fit(size) }
+        // Desk mode: the window sets the display's size, not the other way round.
+        if !isDesk, first || window.contentAspectRatio != size { fit(size) }
     }
 
     /// Sizes the window to the video's shape, as large as 85% of the screen allows.
@@ -149,46 +226,35 @@ public final class MirrorWindowController: NSObject, NSWindowDelegate {
         window.setFrameOrigin(NSPoint(x: old.midX - new.width / 2, y: old.midY - new.height / 2))
     }
 
-    private func loadApps() {
-        let (adb, serial) = (adbPath, phone.serial)
-        Task {
-            let list = (try? await PhoneApps.load(adb: adb, serial: serial)) ?? []
-            self.apps = list
-        }
-    }
-
-    private func open(_ app: PhoneApp) {
-        recentApps.record(app.package)
-        // START_APP opens the app on this session's display.
-        client.sendControl(ScrcpyControlEncoder.startApp(packageName: app.package))
-    }
-
     private func send(_ button: NavigationButtons.Button) {
+        if isDesk, deskHandles(button) { return }
         switch button {
-        case .home where mode != .panelOff:
-            // The Home key is dropped while the phone is locked; start the desktop home instead.
-            guard let displayID else { return }
-            _ = try? Process.run(URL(fileURLWithPath: adbPath),
-                                 arguments: PhoneApps.homeArguments(serial: phone.serial, displayId: displayID))
-        case .apps:
-            break
         case .back: client.sendControl(ScrcpyControlEncoder.tapKeycode(ScrcpyControlEncoder.AndroidKeyCode.back.rawValue))
         case .home: client.sendControl(ScrcpyControlEncoder.tapKeycode(ScrcpyControlEncoder.AndroidKeyCode.home.rawValue))
         case .recents: client.sendControl(ScrcpyControlEncoder.tapKeycode(ScrcpyControlEncoder.AndroidKeyCode.appSwitch.rawValue))
         case .notifications: client.sendControl(ScrcpyControlEncoder.expandNotificationPanel())
+        case .apps: break
         }
     }
 
+    func runAdb(_ arguments: [String]) {
+        _ = try? Process.run(URL(fileURLWithPath: adbPath), arguments: arguments)
+    }
+
+    var adb: String { adbPath }
+
     // MARK: - Power key
 
+    /// Panel-off mode. A power press puts the phone to sleep while its panel is already dark,
+    /// so the user sees nothing (Phase 1 hand test). The first press wakes the phone and turns
+    /// its panel on; the mirror keeps running. Later presses are left alone, so the user can
+    /// still put the phone to sleep.
     private func watchPowerKey() {
+        powerWatcher?.stop()
+        guard panelOffWanted else { return }
         let watcher = PowerKeyWatcher(adbPath: adbPath, serial: phone.serial)
-        let (adb, serial) = (adbPath, phone.serial)
         watcher.onPress = { [weak self] in
-            // The press already put the phone to sleep. Wake it so the panel lights up, then
-            // end the session: the user has picked up the phone.
-            _ = try? Process.run(URL(fileURLWithPath: adb), arguments: ["-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
-            Task { @MainActor in self?.close() }
+            Task { @MainActor in self?.powerPressed() }
         }
         do {
             try watcher.start()
@@ -198,15 +264,30 @@ public final class MirrorWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func powerPressed() {
+        guard panelOffWanted else { return }
+        panelOffWanted = false
+        powerWatcher?.stop()
+        powerWatcher = nil
+        runAdb(["-s", phone.serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
+        client.sendControl(ScrcpyControlEncoder.setDisplayPower(on: true))
+    }
+
     // MARK: - NSWindowDelegate
 
     public func windowWillClose(_ notification: Notification) {
+        closing = true
+        retryTask?.cancel()
         powerWatcher?.stop()
         powerWatcher = nil
-        files.cancelAll()
+        resizeWork?.cancel()
         client.stop()
         sink.attach(pipeline: nil)
         onClose?()
+    }
+
+    public func windowDidResize(_ notification: Notification) {
+        if isDesk { deskWindowResized() }
     }
 }
 

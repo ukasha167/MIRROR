@@ -6,20 +6,27 @@ import MirrorRenderer
 public struct NativeMirrorConfig: Equatable, Sendable {
     public var mode: MirrorMode
     public var serverPath: String
+    public var transport: AdbDevice.Transport
 
-    /// H.265 at 16 Mbit/s. scrcpy's default is H.264 at 8 Mbit/s, which stuttered in the
-    /// Phase 1 hand test. M1 and later decode H.265 in hardware.
-    public static let videoBitRate = 16_000_000
+    /// H.265 at 16 Mbit/s over USB. scrcpy's default is H.264 at 8 Mbit/s, which stuttered in
+    /// the Phase 1 hand test. M1 and later decode H.265 in hardware.
+    public static let usbVideoBitRate = 16_000_000
+    /// Over Wi-Fi, 8 Mbit/s. adb over Wi-Fi measured 6 MB/s (48 Mbit/s) on the test network,
+    /// and a file push shares that link with the video.
+    public static let wifiVideoBitRate = 8_000_000
     public static let maxFps = 60
 
     /// Phone screen timeout during a panel-off session, in milliseconds (the server option
     /// takes ms; the scrcpy client flag takes seconds). The server restores the old value on exit.
     public static let panelOffScreenTimeoutMs = 3_600_000
 
-    public init(mode: MirrorMode, serverPath: String) {
+    public init(mode: MirrorMode, serverPath: String, transport: AdbDevice.Transport = .usb) {
         self.mode = mode
         self.serverPath = serverPath
+        self.transport = transport
     }
+
+    public var videoBitRate: Int { transport == .usb ? Self.usbVideoBitRate : Self.wifiVideoBitRate }
 
     /// Longest video side. 0 keeps the virtual display at its own size.
     public var maxSize: Int {
@@ -34,7 +41,10 @@ public struct NativeMirrorConfig: Equatable, Sendable {
         var args = ["clipboard_autosync=false"]
         switch mode {
         case .desk(let width, let height, let dpi):
-            args += ["new_display=\(width)x\(height)/\(dpi)", "vd_destroy_content=false"]
+            // flex_display lets the window resize the virtual display (RESIZE_DISPLAY).
+            // vd_destroy_content=false moves the display's apps to the phone's screen when the
+            // session ends, so a reconnect can bring them back instead of killing them.
+            args += ["new_display=\(width)x\(height)/\(dpi)", "flex_display=true", "vd_destroy_content=false"]
         case .panelOff:
             args += ["stay_awake=true", "screen_off_timeout=\(Self.panelOffScreenTimeoutMs)"]
         }
@@ -46,6 +56,6 @@ public struct NativeMirrorConfig: Equatable, Sendable {
     public var turnsPanelOff: Bool { mode == .panelOff }
 
     public var streamOptions: ScrcpyStreamClient.ServerOptions {
-        .init(serverPath: serverPath, videoBitRate: Self.videoBitRate, extraArguments: serverArguments)
+        .init(serverPath: serverPath, videoBitRate: videoBitRate, extraArguments: serverArguments)
     }
 }

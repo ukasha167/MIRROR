@@ -44,6 +44,8 @@ let window = MainActor.assumeIsolated {
     let window = MirrorWindowController(phone: phone, adbPath: adbPath, serverPath: serverPath, mode: mode)
     window.onStatus = { fputs("\($0)\n", stderr) }
     window.onClose = { exit(0) }
+    // No menu bar app here, so a lost stream retries on the endpoint it started with.
+    window.onLost = { window.use(phone) }
     window.show()
     return window
 }

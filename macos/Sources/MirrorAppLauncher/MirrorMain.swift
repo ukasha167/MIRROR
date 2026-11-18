@@ -14,8 +14,15 @@ struct MirrorMainApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("Mirror", systemImage: "iphone.and.arrow.forward") {
+        MenuBarExtra {
             DeskMenu(desk: desk)
+        } label: {
+            // While a file goes to the phone, the menu bar shows how far it has got.
+            if let badge = desk.transferBadge {
+                Label(badge, systemImage: "arrow.up.circle").labelStyle(.titleAndIcon)
+            } else {
+                Image(systemName: "iphone.and.arrow.forward")
+            }
         }
     }
 }
@@ -40,6 +47,14 @@ struct DeskMenu: View {
             desk.toggle(.panelOff)
         }
         .disabled(desk.phone == nil)
+
+        if let transfer = desk.transferLabel {
+            Divider()
+            Text(transfer)
+            if desk.isSending {
+                Button("Stop Sending") { desk.stopSending() }
+            }
+        }
 
         Divider()
 

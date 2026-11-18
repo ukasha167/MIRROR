@@ -15,9 +15,13 @@ public struct AdbSyncPush {
 
     let serial: String
     let connect: () throws -> AdbByteStream
+    /// Bytes per second to stay under, read before each chunk; nil sends at full speed.
+    let rateLimit: () -> Int?
 
-    public init(serial: String, connect: @escaping () throws -> AdbByteStream = { try AdbSocket.connect() }) {
+    public init(serial: String, rateLimit: @escaping () -> Int? = { nil },
+                connect: @escaping () throws -> AdbByteStream = { try AdbSocket.connect() }) {
         self.serial = serial
+        self.rateLimit = rateLimit
         self.connect = connect
     }
 
@@ -44,11 +48,14 @@ public struct AdbSyncPush {
         try stream.write(AdbSyncWire.send(remotePath: remote))
 
         var sent: Int64 = 0
+        var pacer = Pacer()
         while true {
+            pacer.wait(rate: rateLimit())
             let chunk = try handle.read(upToCount: AdbSyncWire.maxChunk) ?? Data()
             if chunk.isEmpty { break }
             try stream.write(AdbSyncWire.data(chunk))
             sent += Int64(chunk.count)
+            pacer.sent(chunk.count)
             // Closing mid-transfer makes adbd drop the partial file.
             if !progress(sent, total) { throw CancellationError() }
         }
@@ -93,6 +100,35 @@ public struct AdbSyncPush {
             throw AdbSyncError.shortRead(context: context, expected: count, actual: data.count)
         }
         return data
+    }
+}
+
+/// Keeps a push under a byte rate. adb carries every stream to the phone over one connection,
+/// so a push at full Wi-Fi speed queues megabytes ahead of the mirror's video and the picture
+/// stalls (Phase 2 hand test). Sleeping between chunks keeps that queue short.
+struct Pacer {
+    private var windowStart = Date()
+    private var windowBytes = 0
+    private var lastRate: Int?
+
+    mutating func sent(_ bytes: Int) { windowBytes += bytes }
+
+    /// Sleeps until the bytes sent in this window fit `rate`. A new rate starts a new window.
+    mutating func wait(rate: Int?) {
+        if rate != lastRate {
+            lastRate = rate
+            windowStart = Date()
+            windowBytes = 0
+        }
+        guard let rate, rate > 0 else { return }
+        let due = Double(windowBytes) / Double(rate)
+        let elapsed = Date().timeIntervalSince(windowStart)
+        if due > elapsed { Thread.sleep(forTimeInterval: due - elapsed) }
+        // Restart the window each second so a slow stretch is not made up with a burst.
+        if elapsed > 1 {
+            windowStart = Date()
+            windowBytes = 0
+        }
     }
 }
 
