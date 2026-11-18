@@ -21,7 +21,7 @@ public final class MirrorFrameSink: @unchecked Sendable {
         lock.lock()
         let activePipeline = pipeline
         lock.unlock()
-        activePipeline?.render(pixelBuffer: pixelBuffer)
+        _ = activePipeline?.render(pixelBuffer: pixelBuffer)
     }
 }
 
@@ -32,8 +32,13 @@ public final class MirrorMetalNSView: NSView {
 
     private let metalLayer = CAMetalLayer()
     public private(set) var renderPipeline: MetalRenderPipeline?
-    public var videoSize: CGSize = .zero
+    public var videoSize: CGSize = .zero {
+        didSet { scroll.screen = videoSize }
+    }
     public var onControl: (@Sendable (Data) -> Void)?
+    /// Files dropped on the view. When nil, the view refuses drops.
+    public var onDropFiles: (([URL]) -> Void)?
+    private var scroll = TrackpadScrollTranslator(screen: .zero)
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -53,6 +58,25 @@ public final class MirrorMetalNSView: NSView {
         metalLayer.presentsWithTransaction = false
         layer = metalLayer
         renderPipeline = MetalRenderPipeline(metalLayer: metalLayer)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    // MARK: - File drop
+
+    public override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        onDropFiles != nil && !droppedFiles(sender).isEmpty ? .copy : []
+    }
+
+    public override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let urls = droppedFiles(sender)
+        guard let onDropFiles, !urls.isEmpty else { return false }
+        onDropFiles(urls)
+        return true
+    }
+
+    private func droppedFiles(_ sender: any NSDraggingInfo) -> [URL] {
+        let objects = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+        return (objects as? [URL] ?? []).filter { !$0.hasDirectoryPath }
     }
 
     public override func layout() {
@@ -81,11 +105,49 @@ public final class MirrorMetalNSView: NSView {
 
     public override func scrollWheel(with event: NSEvent) {
         guard let (x, y, w, h) = mappedPosition(from: event) else { return }
-        let factor: Float = event.hasPreciseScrollingDeltas ? 0.12 : 1.0
-        let hScroll = Float(event.scrollingDeltaX) * factor
-        let vScroll = Float(event.scrollingDeltaY) * factor
-        guard hScroll != 0 || vScroll != 0 else { return }
-        onControl?(ScrcpyControlEncoder.injectScroll(x: x, y: y, screenWidth: w, screenHeight: h, horizontalScroll: hScroll, verticalScroll: vScroll))
+        let fit = videoRect
+        // Points to phone pixels, so content moves under the fingers at the same speed.
+        let scale = fit.width > 0 ? CGFloat(w) / fit.width : 1
+        let outputs = scroll.handle(
+            phase: Self.phase(of: event),
+            location: CGPoint(x: CGFloat(x), y: CGFloat(y)),
+            delta: CGVector(dx: event.scrollingDeltaX * scale, dy: event.scrollingDeltaY * scale),
+            wheelDelta: CGVector(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY)
+        )
+        for output in outputs {
+            switch output {
+            case .touch(let action, let p):
+                onControl?(ScrcpyControlEncoder.injectTouch(
+                    action: action, pointerId: TrackpadScrollTranslator.fingerPointerId,
+                    x: Int32(p.x.rounded()), y: Int32(p.y.rounded()), screenWidth: w, screenHeight: h,
+                    pressure: action == .up ? 0 : 1, actionButton: 0, buttons: 0))
+            case .wheel(let dx, let dy, let p):
+                onControl?(ScrcpyControlEncoder.injectScroll(
+                    x: Int32(p.x), y: Int32(p.y), screenWidth: w, screenHeight: h,
+                    horizontalScroll: dx, verticalScroll: dy))
+            }
+        }
+    }
+
+    static func phase(of event: NSEvent) -> TrackpadScrollTranslator.Phase {
+        if !event.momentumPhase.isEmpty { return .momentum }
+        let p = event.phase
+        // mayBegin means fingers rest without moving; pressing then would read as a tap.
+        if p.contains(.mayBegin) { return .momentum }
+        if p.contains(.began) { return .began }
+        if p.contains(.changed) { return .changed }
+        if p.contains(.ended) { return .ended }
+        if p.contains(.cancelled) { return .cancelled }
+        return .none
+    }
+
+    /// Where the video sits inside the view (the layer letterboxes with `.resizeAspect`).
+    var videoRect: CGRect {
+        guard videoSize.width > 0, videoSize.height > 0 else { return bounds }
+        let scale = min(bounds.width / videoSize.width, bounds.height / videoSize.height)
+        let size = CGSize(width: videoSize.width * scale, height: videoSize.height * scale)
+        return CGRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2,
+                      width: size.width, height: size.height)
     }
 
     public override func keyDown(with event: NSEvent) {
@@ -135,8 +197,10 @@ public final class MirrorMetalNSView: NSView {
         let hInt = Int(videoSize.height.rounded())
         guard wInt > 0, hInt > 0, bounds.width > 0, bounds.height > 0 else { return nil }
         let local = convert(event.locationInWindow, from: nil)
-        let nx = max(0.0, min(1.0, local.x / bounds.width))
-        let ny = max(0.0, min(1.0, local.y / bounds.height))
+        let fit = videoRect
+        guard fit.width > 0, fit.height > 0 else { return nil }
+        let nx = max(0.0, min(1.0, (local.x - fit.minX) / fit.width))
+        let ny = max(0.0, min(1.0, (local.y - fit.minY) / fit.height))
         let w = UInt16(clamping: wInt)
         let h = UInt16(clamping: hInt)
         let px = Int32(clamping: Int((nx * CGFloat(w)).rounded()))
