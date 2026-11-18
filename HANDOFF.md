@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated 2026-11-19. Read `ROADMAP.md` first. Phases 1 and 2 are committed; Phase 3 is under way.
+Last updated 2026-11-19. Read `ROADMAP.md` first. Phases 1 and 2 are committed; Phase 3 is under way. All Phase 3 items are built; hand checks remain.
 
 ## Phase 3 hand test results and fixes (2026-11-19)
 
@@ -17,11 +17,25 @@ Last updated 2026-11-19. Read `ROADMAP.md` first. Phases 1 and 2 are committed; 
 
 `swift test` in `macos/`: 89 tests pass. Rebuild the server (`make scrcpy-server`) and restart the menu bar app to pick up all of this.
 
+## Companion app (2026-11-19)
+
+`android/companion` (package `dev.mirror.companion`) is a new, small app for the adb design. The old `android/app` is untouched; it belongs to the custom-protocol design that ROADMAP plans to archive.
+
+- Android turns `adb_wifi_enabled` (Wireless debugging) off at every boot and every Wi-Fi drop. The app sets it back to 1 when the phone joins an approved Wi-Fi network.
+- It wakes through `registerNetworkCallback(request, PendingIntent)` and `BOOT_COMPLETED`. Nothing runs between those wakes: no service, no wakelock.
+- Approved networks are matched by Wi-Fi name. Android's own trusted list is keyed by BSSID, so a different access point of the same mesh shows Android's "Allow on this network?" dialog once.
+- Android hides the Wi-Fi name from apps without location, so the Mac also grants fine and background location.
+- The Mac runs the grant and approve step (`CompanionSetup`) on the first USB locate of each phone boot, before `adb tcpip`. `make companion` builds, installs and sets it up.
+- The "Use on Mac" tile toggles Wireless debugging on the current network. It does not approve the network.
+
+Checked on the Pixel: `mirror-desk companion <apk>` installed the app, granted the three permissions and approved `HUAWEI-5G-9fDV`. `adb_wifi_enabled` went to 1, adb's mDNS browser saw `_adb-tls-connect._tcp`, and `adb connect` to the TLS port succeeded with the key trusted over USB (no pairing code). Not checked: a real reboot.
+
 ## New tools
 
 - `mirror-window app <package>`: one app in its own window.
 - `mirror-desk push <file>` uses the resumable push. `MIRROR_SERIAL` picks a transport, `MIRROR_STOP_AT=<percent>` stops partway.
 - `make scrcpy-server` now applies patch 0003 (app icons). The built server is in `build/`.
+- `mirror-desk companion [apk]`: installs (with an apk) and sets up the companion app over USB. `make companion` builds the apk first.
 
 ## Hand checks to do
 
@@ -32,6 +46,9 @@ Last updated 2026-11-19. Read `ROADMAP.md` first. Phases 1 and 2 are committed; 
 5. Right-click an app, Open in New Window: whole app visible, typing works.
 6. Send a 1 GB file over Wi-Fi, plug the cable in at 30%: the menu should continue from about 30% over USB. Pull the cable: it should continue over Wi-Fi.
 7. Stop Sending mid-file: the menu says "Stopped" at once.
+8. Reboot the phone, unlock it, leave the cable out. Within a minute of joining home Wi-Fi, open Mirror's menu on the Mac: desk mode should start over Wi-Fi.
+9. Add the "Use on Mac" tile. Tap it off and on: the subtitle follows, and Developer options shows Wireless debugging changing.
+10. Join a network that is not approved (phone hotspot from another phone): no Android dialog should appear by itself.
 
 ## Things learned
 
@@ -42,7 +59,10 @@ Last updated 2026-11-19. Read `ROADMAP.md` first. Phases 1 and 2 are committed; 
 - `settings put system pointer_location 1` draws touches on the virtual display too, which shows where an injected tap lands.
 - An NSView must not set its own backing layer's frame.
 - Toybox `dd` supports `seek=`, `conv=notrunc` and `oflag=seek_bytes`.
+- adbd's TLS port (Wireless debugging) accepts any key in `adb_keys`, including keys allowed over USB. `adb pair` is only needed for a Mac that never had the cable.
+- `dumpsys adb` shows the Wireless debugging state, the TLS port and whether the current network is trusted.
+- Android delivers no clicks to a Quick Settings tile in `STATE_UNAVAILABLE`.
 
 ## Next
 
-Hand checks above, then the Android companion app and Quick Settings tile (ROADMAP Phase 3).
+Hand checks above. Then Phase 4, and the decision on archiving the old `android/app`, `crates/` and pairing code.
