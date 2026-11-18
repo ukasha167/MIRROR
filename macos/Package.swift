@@ -16,8 +16,14 @@ let package = Package(
         .library(name: "MirrorAppLib", targets: ["MirrorApp"]),
         .library(name: "MirrorDesk", targets: ["MirrorDesk"]),
         .executable(name: "mirror-desk", targets: ["MirrorDeskCLI"]),
+        .executable(name: "mirror-window", targets: ["MirrorWindowCLI"]),
     ],
-    dependencies: [],
+    // NearbyShare's dependencies, pinned to the versions NearDrop's Xcode project resolves.
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-protobuf.git", exact: "1.21.0"),
+        .package(url: "https://github.com/leif-ibsen/SwiftECC", exact: "3.5.3"),
+        .package(url: "https://github.com/leif-ibsen/BigInt", exact: "1.9.0"),
+    ],
     targets: [
         .target(
             name: "MirrorCoreBridge",
@@ -45,14 +51,30 @@ let package = Package(
             path: "Sources/NearDropReceiver"
         ),
         .target(
+            name: "NearbyShare",
+            dependencies: [
+                .product(name: "SwiftProtobuf", package: "swift-protobuf"),
+                .product(name: "SwiftECC", package: "SwiftECC"),
+                .product(name: "BigInt", package: "BigInt"),
+            ],
+            path: "Vendor/NearbyShare",
+            exclude: ["UNLICENSE", "README.md"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .target(
             name: "MirrorDesk",
-            dependencies: [],
+            dependencies: ["MirrorRenderer", "NearbyShare"],
             path: "Sources/MirrorDesk"
         ),
         .executableTarget(
             name: "MirrorDeskCLI",
             dependencies: ["MirrorDesk"],
             path: "Sources/MirrorDeskCLI"
+        ),
+        .executableTarget(
+            name: "MirrorWindowCLI",
+            dependencies: ["MirrorDesk"],
+            path: "Sources/MirrorWindowCLI"
         ),
         .target(
             name: "MirrorApp",

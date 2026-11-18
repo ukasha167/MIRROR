@@ -20,7 +20,7 @@ struct MirrorMainApp: App {
     }
 }
 
-/// Phase 1 menu: scrcpy-based desk mode, panel-off mirror, clipboard sync, Quick Share.
+/// Menu: native desk mode and panel-off mirror windows, clipboard sync, Quick Share receiver.
 struct DeskMenu: View {
     @ObservedObject var desk: DeskController
 
@@ -44,8 +44,9 @@ struct DeskMenu: View {
         Divider()
 
         Toggle("Sync Clipboard", isOn: $desk.clipboardEnabled)
-        Button("Open Quick Share Receiver (NearDrop)") {
-            QuickShareLauncher.open()
+        Text(desk.quickShareLabel)
+        Button("Show Received Files") {
+            NSWorkspace.shared.open(FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0])
         }
 
         Divider()
