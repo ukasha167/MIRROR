@@ -4,23 +4,7 @@ This repository builds the Android and macOS continuity suite described in `plan
 
 ## Model routing and quota management
 
-Always pick the lowest-cost model tier that fits the task so rate limits stay low. Split work across non-overlapping directories and run independent tasks in parallel.
-
-### Gemini harness routing
-
-| Tier | Model ID | Effort | Assigned tasks |
-| :--- | :--- | :--- | :--- |
-| Tier 1 | `gemini-3.8-flash-high` | High | Project scaffolding, directory creation, cloning and vendoring upstream repositories, build configuration (`Cargo.toml`, `Package.swift`, Gradle files, `Makefile`), simple wiring, formatting, and stall monitoring. |
-| Tier 2 | `gemini-4-argon-medium` | Medium | Feature implementation across Rust crates, Swift UI views, and Kotlin services, wire protocol parsers and serializers, state machines, mock transports, and unit or integration tests. |
-| Tier 3 | `gemini-4-argon-high` | High | High-complexity systems code (zero-copy `VTDecompressionSession` to `IOSurface` to `CAMetalLayer` and `CMIOExtension`, `FSKit` volume lifecycles, pipelined USB/ADB/MTP concurrency, `FLAG_SECURE` root and Binder patches, mTLS and Noise cryptography), cross-module debugging, and all architecture or code reviews. |
-
-### Claude harness routing
-
-| Tier | Model family | Effort | Assigned tasks |
-| :--- | :--- | :--- | :--- |
-| Tier 1 | Haiku (`claude-haiku`) | High | Project scaffolding, cloning and vendoring upstream repositories, build configuration, simple wiring, and boilerplate generation. (If Haiku is unavailable in the active roster, fall back to `claude-sonnet-5-5-low`.) |
-| Tier 2 | Sonnet (`claude-sonnet-5-5-medium`) | Medium | Medium-complexity coding across Rust crates, Swift targets, and Android modules, protocol handlers, UI components, and test suites. |
-| Tier 3 | Opus (`claude-opus-5-5-high`) | High | High-complexity systems code, zero-copy media and USB pipelines, cryptographic pairing, `FLAG_SECURE` bypass internals, and code or architecture reviews. |
+Always pick the lowest-cost model tier that fits the task without sacrificing quality, so rate limits stay low. Split work across non-overlapping directories and run independent tasks in parallel.
 
 ## Swarm and subagent rules
 
