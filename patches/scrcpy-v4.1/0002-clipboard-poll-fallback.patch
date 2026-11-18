@@ -1,0 +1,79 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/control/Controller.java b/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
+index 55d6e11..9a4b83c 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
++++ b/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
+@@ -98,6 +98,9 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+     private final KeyCharacterMap charMap = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
+ 
+     private final AtomicBoolean isSettingClipboard = new AtomicBoolean();
++    // Last clipboard text known to both sides (sent to the client, or received from it). Shared by the listener and the poll thread so
++    // the same text is never sent twice.
++    private final AtomicReference<String> lastSyncedClipboard = new AtomicReference<>();
+ 
+     private final AtomicReference<DisplayData> displayData = new AtomicReference<>();
+     private final Object displayDataAvailable = new Object(); // condition variable
+@@ -151,18 +154,51 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+                         // This is a notification for the change we are currently applying, ignore it
+                         return;
+                     }
+-                    String text = Device.getClipboardText();
+-                    if (text != null) {
+-                        DeviceMessage msg = DeviceMessage.createClipboard(text);
+-                        sender.send(msg);
+-                    }
++                    sendClipboardIfChanged();
+                 });
++                startClipboardPoll();
+             } else {
+                 Ln.w("No clipboard manager, copy-paste between device and computer will not work");
+             }
+         }
+     }
+ 
++    private void sendClipboardIfChanged() {
++        String text = Device.getClipboardText();
++        if (text == null) {
++            return;
++        }
++        String previous = lastSyncedClipboard.getAndSet(text);
++        if (text.equals(previous)) {
++            return;
++        }
++        sender.send(DeviceMessage.createClipboard(text));
++    }
++
++    private void startClipboardPoll() {
++        // On Android 17 the primary clip listener registered by the shell user did not fire in testing. The shell user holds
++        // READ_CLIPBOARD_IN_BACKGROUND, so reading the clipboard once per second is a reliable fallback.
++        lastSyncedClipboard.set(Device.getClipboardText());
++        Thread thread = new Thread(() -> {
++            while (!Thread.currentThread().isInterrupted()) {
++                try {
++                    Thread.sleep(1000);
++                } catch (InterruptedException e) {
++                    return;
++                }
++                if (!isSettingClipboard.get()) {
++                    try {
++                        sendClipboardIfChanged();
++                    } catch (RuntimeException e) {
++                        Ln.w("Clipboard poll failed", e);
++                    }
++                }
++            }
++        }, "clipboard-poll");
++        thread.setDaemon(true);
++        thread.start();
++    }
++
+     @Override
+     public void onNewVirtualDisplay(int virtualDisplayId, PositionMapper positionMapper) {
+         DisplayData data = new DisplayData(virtualDisplayId, positionMapper);
+@@ -706,6 +742,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+ 
+     private boolean setClipboard(String text, boolean paste, long sequence) {
+         isSettingClipboard.set(true);
++        lastSyncedClipboard.set(text);
+         boolean ok = Device.setClipboardText(text);
+         isSettingClipboard.set(false);
+         if (ok) {

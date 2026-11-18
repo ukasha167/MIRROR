@@ -1,0 +1,77 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java b/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
+index 5ed4c73..c6ec81e 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
++++ b/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
+@@ -74,6 +74,9 @@ public class NewDisplayCapture extends SurfaceCapture {
+ 
+     private int dpi;
+ 
++    // Desk mode: pokes the virtual display's power group so it stays awake while the phone is locked
++    private Thread keepAliveThread;
++
+     public NewDisplayCapture(VirtualDisplayListener vdListener, Options options) {
+         this.vdListener = vdListener;
+         this.newDisplay = options.getNewDisplay();
+@@ -227,8 +230,7 @@ public class NewDisplayCapture extends SurfaceCapture {
+                         | VIRTUAL_DISPLAY_FLAG_ALWAYS_UNLOCKED
+                         | VIRTUAL_DISPLAY_FLAG_TOUCH_FEEDBACK_DISABLED;
+                 if (Build.VERSION.SDK_INT >= AndroidVersions.API_34_ANDROID_14) {
+-                    flags |= VIRTUAL_DISPLAY_FLAG_OWN_FOCUS
+-                            | VIRTUAL_DISPLAY_FLAG_DEVICE_DISPLAY_GROUP;
++                    flags |= VIRTUAL_DISPLAY_FLAG_OWN_FOCUS;
+                 }
+             }
+             VirtualDisplay vd = ServiceManager.getDisplayManager()
+@@ -236,6 +238,7 @@ public class NewDisplayCapture extends SurfaceCapture {
+             setCurrentVirtualDisplay(vd); // used for client resize
+             int virtualDisplayId = vd.getDisplay().getDisplayId();
+             Ln.i("New display: " + displaySize.getWidth() + "x" + displaySize.getHeight() + "/" + dpi + " (id=" + virtualDisplayId + ")");
++            keepAliveThread = startKeepAlive(virtualDisplayId);
+ 
+             if (displayImePolicy != -1) {
+                 ServiceManager.getWindowManager().setDisplayImePolicy(virtualDisplayId, displayImePolicy);
+@@ -263,6 +266,36 @@ public class NewDisplayCapture extends SurfaceCapture {
+         }
+     }
+ 
++    private static Thread startKeepAlive(int displayId) {
++        // The display has its own power group (no DEVICE_DISPLAY_GROUP flag). While the keyguard shows, that group sleeps after ~10 s
++        // without user activity. The shell user holds DEVICE_POWER, so it can report activity for this display every 4 s.
++        Thread thread = new Thread(() -> {
++            while (!Thread.currentThread().isInterrupted()) {
++                try {
++                    ServiceManager.getPowerManager().userActivity(displayId);
++                } catch (RuntimeException e) {
++                    Ln.w("Desk mode keep-alive failed for display " + displayId + ", stopping", e);
++                    return;
++                }
++                try {
++                    Thread.sleep(4000);
++                } catch (InterruptedException e) {
++                    return;
++                }
++            }
++        }, "vd-keepalive");
++        thread.setDaemon(true);
++        thread.start();
++        return thread;
++    }
++
++    private void stopKeepAlive() {
++        if (keepAliveThread != null) {
++            keepAliveThread.interrupt();
++            keepAliveThread = null;
++        }
++    }
++
+     @Override
+     public void start(Surface surface) throws IOException {
+         if (displayTransform != null) {
+@@ -294,6 +327,7 @@ public class NewDisplayCapture extends SurfaceCapture {
+ 
+     @Override
+     public void release() {
++        stopKeepAlive();
+         displayMonitor.stopAndRelease();
+ 
+         if (debouncer != null) {
