@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 rootProject.name = "mirror-android"
 include(":app")
 include(":shizuku-helper")
+include(":companion")
