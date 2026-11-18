@@ -10,7 +10,9 @@ extension MirrorWindowController {
         let content = NSView()
         let dock = NSHostingView(rootView: DeskDockView(model: apps))
         let launcher = NSHostingView(rootView: DeskLauncherView(model: apps))
-        for view in [surface, dock, launcher] as [NSView] {
+        let overview = NSHostingView(rootView: DeskOverviewView(model: apps))
+        overview.isHidden = true
+        for view in [surface, dock, launcher, overview] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -27,15 +29,29 @@ extension MirrorWindowController {
             launcher.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
             launcher.topAnchor.constraint(equalTo: surface.topAnchor),
             launcher.bottomAnchor.constraint(equalTo: surface.bottomAnchor),
+            overview.leadingAnchor.constraint(equalTo: surface.leadingAnchor),
+            overview.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
+            overview.topAnchor.constraint(equalTo: surface.topAnchor),
+            overview.bottomAnchor.constraint(equalTo: surface.bottomAnchor),
         ])
         window.contentView = content
         window.contentMinSize = NSSize(width: 480, height: 360)
         addStatusLabel(over: content)
         apps.open = { [weak self] in self?.open($0) }
         apps.openWindow = { [weak self] in self?.onOpenAppWindow?($0) }
+        apps.closeTask = { [weak self] task in
+            guard let self else { return }
+            self.runAdb(DeskTasks.removeArguments(serial: self.phone.serial, taskId: task.id))
+        }
         launcherObserver = apps.$launcherShown.sink { [weak self, weak launcher] shown in
             launcher?.isHidden = !shown
+            if shown { self?.apps.overview = nil }
             if !shown, let self { self.window.makeFirstResponder(self.surface) }
+        }
+        overviewObserver = apps.$overview.sink { [weak self, weak overview] tasks in
+            overview?.isHidden = tasks == nil
+            if tasks != nil { self?.apps.launcherShown = false }
+            if tasks == nil, let self { self.window.makeFirstResponder(self.surface) }
         }
     }
 
@@ -103,8 +119,21 @@ extension MirrorWindowController {
         case .apps:
             apps.launcherShown.toggle()
             return true
+        case .recents where soloApp == nil:
+            if apps.overview != nil { apps.overview = nil } else { showOverview() }
+            return true
         default:
             return false
+        }
+    }
+
+    /// Lists the apps open on this desk's display and shows them as cards.
+    func showOverview() {
+        guard let displayID else { return }
+        let (adb, serial) = (self.adb, phone.serial)
+        Task {
+            let out = try? await ProcessCommandRunner().run(adb, DeskTasks.listArguments(serial: serial))
+            apps.overview = DeskTasks.parse(out?.stdout ?? "", displayId: displayID)
         }
     }
 

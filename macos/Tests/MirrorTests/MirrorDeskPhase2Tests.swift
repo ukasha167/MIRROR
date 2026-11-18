@@ -215,7 +215,7 @@ struct PhoneAppsTests {
 
     @Test("Desk mode shows Back, Home, Apps; panel-off shows the four Android keys")
     func buttons() {
-        #expect(NavigationButtons.Button.forMode(desk: true) == [.back, .home, .apps])
+        #expect(NavigationButtons.Button.forMode(desk: true) == [.back, .home, .recents, .apps])
         #expect(NavigationButtons.Button.forMode(desk: false) == [.back, .home, .recents, .notifications])
     }
 }

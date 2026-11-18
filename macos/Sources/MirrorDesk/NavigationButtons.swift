@@ -39,10 +39,11 @@ enum NavigationButtons {
             }
         }
 
-        /// Desk mode: the phone is locked, so Recents and the notification shade do nothing
-        /// there. Apps opens the Mac-drawn launcher; its dock stands in for Recents.
+        /// Desk mode: the notification shade exists only on the phone's own screen. Recents
+        /// opens a Mac-drawn Overview (Android has none on a virtual display); Apps opens the
+        /// Mac-drawn launcher.
         static func forMode(desk: Bool) -> [Button] {
-            desk ? [.back, .home, .apps] : [.back, .home, .recents, .notifications]
+            desk ? [.back, .home, .recents, .apps] : [.back, .home, .recents, .notifications]
         }
     }
 

@@ -10,8 +10,11 @@ final class DeskAppsModel: ObservableObject {
     @Published var recent: [String]
     @Published var launcherShown = true
     @Published var query = ""
+    /// Overview cards while the Overview shows; nil hides it.
+    @Published var overview: [DeskTask]?
     var open: (PhoneApp) -> Void = { _ in }
     var openWindow: (PhoneApp) -> Void = { _ in }
+    var closeTask: (DeskTask) -> Void = { _ in }
     private var icons: [String: NSImage] = [:]
     private let recentStore = RecentApps()
 
@@ -35,6 +38,21 @@ final class DeskAppsModel: ObservableObject {
         query = ""
         launcherShown = false
         open(app)
+    }
+
+    /// The listed app for `package`, or a stand-in named after the package.
+    func app(for package: String) -> PhoneApp {
+        apps?.first { $0.package == package } ?? PhoneApp(name: package, package: package, isSystem: false)
+    }
+
+    func switchTo(_ task: DeskTask) {
+        overview = nil
+        launch(app(for: task.package))
+    }
+
+    func close(_ task: DeskTask) {
+        overview?.removeAll { $0.id == task.id }
+        closeTask(task)
     }
 
     func icon(_ app: PhoneApp) -> NSImage? {

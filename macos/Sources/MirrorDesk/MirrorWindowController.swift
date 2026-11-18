@@ -43,6 +43,7 @@ public final class MirrorWindowController: NSObject, NSWindowDelegate {
     var lastApp: String?
     var resizeWork: DispatchWorkItem?
     var launcherObserver: Any?
+    var overviewObserver: Any?
 
     public init(phone: PhoneEndpoint, adbPath: String, serverPath: String, mode: MirrorMode, app: PhoneApp? = nil) {
         self.soloApp = app
@@ -144,7 +145,8 @@ public final class MirrorWindowController: NSObject, NSWindowDelegate {
         retryTask = nil
         link = .connecting
         showStatus("Connecting over \(phone.transport == .usb ? "USB" : "Wi-Fi")...")
-        let config = NativeMirrorConfig(mode: currentMode, serverPath: serverPath, transport: phone.transport)
+        let config = NativeMirrorConfig(mode: currentMode, serverPath: serverPath, transport: phone.transport,
+                                        soloApp: soloApp != nil)
         if isDesk {
             displayID = nil
             let log = LogScanner()
