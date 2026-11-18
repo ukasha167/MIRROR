@@ -19,6 +19,7 @@ public enum ScrcpyControlEncoder {
         case rotateDevice = 11
         case startApp = 16
         case resetVideo = 17
+        case resizeDisplay = 21
     }
 
     public enum TouchAction: UInt8, Sendable {
@@ -184,6 +185,15 @@ public enum ScrcpyControlEncoder {
         data.append(MessageType.startApp.rawValue)
         data.append(UInt8(truncatingIfNeeded: utf8.count))
         data.append(utf8)
+        return data
+    }
+
+    /// Encodes `TYPE_RESIZE_DISPLAY` (5 bytes): `[0] type=21 (u8), [1..3] width (u16 BE), [3..5] height (u16 BE)`.
+    /// Only a `flex_display=true` virtual display accepts it; the server debounces repeated requests.
+    public static func resizeDisplay(width: Int, height: Int) -> Data {
+        var data = Data([MessageType.resizeDisplay.rawValue])
+        appendBigEndian(UInt16(clamping: width), to: &data)
+        appendBigEndian(UInt16(clamping: height), to: &data)
         return data
     }
 

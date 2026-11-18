@@ -33,12 +33,16 @@ public final class MirrorMetalNSView: NSView {
     private let metalLayer = CAMetalLayer()
     public private(set) var renderPipeline: MetalRenderPipeline?
     public var videoSize: CGSize = .zero {
-        didSet { scroll.screen = videoSize }
+        didSet {
+            scroll.screen = videoSize
+            pinch.screen = videoSize
+        }
     }
     public var onControl: (@Sendable (Data) -> Void)?
     /// Files dropped on the view. When nil, the view refuses drops.
     public var onDropFiles: (([URL]) -> Void)?
     private var scroll = TrackpadScrollTranslator(screen: .zero)
+    private var pinch = PinchTranslator(screen: .zero)
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -126,6 +130,23 @@ public final class MirrorMetalNSView: NSView {
                     x: Int32(p.x), y: Int32(p.y), screenWidth: w, screenHeight: h,
                     horizontalScroll: dx, verticalScroll: dy))
             }
+        }
+    }
+
+    public override func magnify(with event: NSEvent) {
+        guard let (x, y, w, h) = mappedPosition(from: event) else { return }
+        let phase: PinchTranslator.Phase
+        if event.phase.contains(.began) { phase = .began }
+        else if event.phase.contains(.ended) || event.phase.contains(.cancelled) { phase = .ended }
+        else { phase = .changed }
+        let fingers = pinch.handle(phase: phase, location: CGPoint(x: CGFloat(x), y: CGFloat(y)),
+                                   magnification: event.magnification)
+        for finger in fingers {
+            onControl?(ScrcpyControlEncoder.injectTouch(
+                action: finger.action, pointerId: finger.pointerId,
+                x: Int32(finger.point.x.rounded()), y: Int32(finger.point.y.rounded()),
+                screenWidth: w, screenHeight: h,
+                pressure: finger.action == .up ? 0 : 1, actionButton: 0, buttons: 0))
         }
     }
 
