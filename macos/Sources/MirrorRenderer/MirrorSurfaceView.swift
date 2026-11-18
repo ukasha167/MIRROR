@@ -85,7 +85,9 @@ public final class MirrorMetalNSView: NSView {
 
     public override func layout() {
         super.layout()
-        metalLayer.frame = bounds
+        // metalLayer is this view's backing layer, so AppKit owns its frame. Setting it to
+        // `bounds` moved it to the superview's origin: in desk mode the video then drew one
+        // dock height lower than the view, and taps landed above what the user saw.
         metalLayer.contentsScale = window?.backingScaleFactor ?? 2.0
     }
 
