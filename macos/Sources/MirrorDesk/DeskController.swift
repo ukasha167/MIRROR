@@ -9,6 +9,7 @@ public final class DeskController: ObservableObject {
     @Published public private(set) var status = "Looking for phone..."
     @Published public private(set) var openWindows: Set<WindowKind> = []
     @Published public private(set) var clipboardActive = false
+    @Published public private(set) var quickShare: QuickShareReceiver.State = .off
     @Published public var clipboardEnabled = true {
         didSet { clipboardEnabled ? startClipboardIfNeeded() : stopClipboard() }
     }
@@ -19,20 +20,34 @@ public final class DeskController: ObservableObject {
     static let refreshInterval: UInt64 = 5
 
     private var adb: AdbClient?
-    private var scrcpyPath: String?
     private var server: ScrcpyServer?
     private var clipboard: ClipboardBridge?
     private var clipboardSerial: String?
-    private var windows: [WindowKind: ScrcpyWindowProcess] = [:]
+    private var windows: [WindowKind: MirrorWindowController] = [:]
     private var refreshTask: Task<Void, Never>?
+    private let quickShareReceiver = QuickShareReceiver()
 
     public init() {
+        quickShareReceiver.onChange = { [weak self] in self?.quickShare = $0 }
+        quickShareReceiver.start()
         refreshTask = Task { [weak self] in
             await self?.setUpTools()
             while !Task.isCancelled {
                 await self?.refresh()
                 try? await Task.sleep(nanoseconds: Self.refreshInterval * 1_000_000_000)
             }
+        }
+    }
+
+    /// One line for the menu, such as "Quick Share: receiving photo.jpg from Pixel 7 Pro".
+    public var quickShareLabel: String {
+        switch quickShare {
+        case .off: "Quick Share: off"
+        case .visible: "Quick Share: visible as \(Host.current().localizedName ?? "this Mac")"
+        case .waiting(let device, let summary): "Quick Share: \(device) wants to send \(summary)"
+        case .receiving(let device, let summary): "Quick Share: receiving \(summary) from \(device)"
+        case .received(let summary): "Quick Share: received \(summary)"
+        case .failed(let device, let message): "Quick Share from \(device) failed: \(message)"
         }
     }
 
@@ -47,8 +62,8 @@ public final class DeskController: ObservableObject {
         do {
             let adbPath = try ToolLocator.find("adb")
             adb = AdbClient(adbPath: adbPath)
+            // The scrcpy client is only asked for its version, which picks our server build.
             let scrcpy = try ToolLocator.find("scrcpy")
-            scrcpyPath = scrcpy
             let out = try await ProcessCommandRunner().run(scrcpy, ["--version"])
             guard let version = ScrcpyServer.parseClientVersion(out.stdout) else {
                 status = "Could not read scrcpy version"
@@ -119,33 +134,25 @@ public final class DeskController: ObservableObject {
 
     public func toggle(_ kind: WindowKind) {
         if let window = windows[kind] {
-            window.stop()
+            window.close()
             return
         }
-        guard let phone, let server, let scrcpyPath else { return }
+        guard let phone, let server, let adb else { return }
         let mode: MirrorMode = kind == .desk ? .defaultDesk : .panelOff
-        let title = kind == .desk ? "\(phone.model) desk" : phone.model
-        let config = ScrcpyLaunchConfig(serial: phone.serial, mode: mode, server: server, windowTitle: title)
-        let process = ScrcpyWindowProcess(scrcpyPath: scrcpyPath, config: config)
-        process.onExit = { [weak self] code, output in
-            Task { @MainActor in
-                self?.windows[kind] = nil
-                self?.openWindows.remove(kind)
-                if code != 0 { self?.status = "scrcpy exited \(code): \(output.split(separator: "\n").last ?? "")" }
-            }
+        let window = MirrorWindowController(phone: phone, adbPath: adb.adbPath, serverPath: server.path, mode: mode)
+        window.onClose = { [weak self] in
+            self?.windows[kind] = nil
+            self?.openWindows.remove(kind)
         }
-        do {
-            try process.start()
-            windows[kind] = process
-            openWindows.insert(kind)
-        } catch {
-            status = "Could not start scrcpy: \(error)"
-        }
+        window.onStatus = { [weak self] in self?.status = $0 }
+        windows[kind] = window
+        openWindows.insert(kind)
+        window.show()
     }
 
     public func shutdown() {
         refreshTask?.cancel()
-        windows.values.forEach { $0.stop() }
+        windows.values.forEach { $0.close() }
         stopClipboard()
     }
 }
