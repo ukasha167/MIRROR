@@ -122,22 +122,24 @@ struct PhoneLocatorTests {
 struct ScrcpyLaunchTests {
     let server = ScrcpyServer(path: "/tmp/scrcpy-server-v4.1", version: "4.1")
 
-    @Test("Desk mode asks for a new display and keeps apps after close")
+    @Test("Desk mode asks the server for a new display and keeps apps after close")
     func deskArgs() {
-        let config = ScrcpyLaunchConfig(serial: "SER1", mode: .desk(width: 1600, height: 1000, dpi: 200), server: server, windowTitle: "Pixel")
-        #expect(config.arguments.contains("--new-display=1600x1000/200"))
-        #expect(config.arguments.contains("--no-vd-destroy-content"))
-        #expect(config.arguments.contains("--serial=SER1"))
-        #expect(!config.arguments.contains("--turn-screen-off"))
-        #expect(config.environment["SCRCPY_SERVER_PATH"] == "/tmp/scrcpy-server-v4.1")
+        let config = NativeMirrorConfig(mode: .desk(width: 1600, height: 1000, dpi: 200), serverPath: server.path)
+        #expect(config.serverArguments.contains("new_display=1600x1000/200"))
+        #expect(config.serverArguments.contains("vd_destroy_content=false"))
+        #expect(config.serverArguments.contains("clipboard_autosync=false"))
+        #expect(!config.turnsPanelOff)
+        #expect(config.maxSize == 0)
+        #expect(config.streamOptions.serverPath == "/tmp/scrcpy-server-v4.1")
+        #expect(config.streamOptions.videoBitRate == 16_000_000)
     }
 
-    @Test("Panel-off mirror turns the panel off and stretches the screen timeout")
+    @Test("Panel-off mirror turns the panel off and stretches the timeout in ms")
     func panelOffArgs() {
-        let args = ScrcpyLaunchConfig(serial: "SER1", mode: .panelOff, server: server, windowTitle: "Pixel").arguments
-        #expect(args.contains("--turn-screen-off"))
-        #expect(args.contains("--screen-off-timeout=3600"))
-        #expect(!args.contains { $0.hasPrefix("--new-display") })
+        let config = NativeMirrorConfig(mode: .panelOff, serverPath: server.path)
+        #expect(config.turnsPanelOff)
+        #expect(config.serverArguments.contains("screen_off_timeout=3600000"))
+        #expect(!config.serverArguments.contains { $0.hasPrefix("new_display") })
     }
 
     @Test("Client version comes from scrcpy --version")
