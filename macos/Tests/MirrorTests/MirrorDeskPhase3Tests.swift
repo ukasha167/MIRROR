@@ -168,3 +168,34 @@ final class Counter: @unchecked Sendable {
     func next() -> Int { lock.withLock { count += 1; return count } }
     var value: Int { lock.withLock { count } }
 }
+
+struct MdnsFallbackTests {
+    @Test("mDNS rows list wireless debugging first and skip pairing services")
+    func parse() {
+        let out = """
+        List of discovered mdns services
+        adb-SER1-oWgbVo\t_adb._tcp\t192.168.18.230:5555
+        adb-SER1-oWgbVo\t_adb-tls-pairing._tcp\t192.168.18.230:40001
+        adb-SER1-oWgbVo\t_adb-tls-connect._tcp\t192.168.18.230:37155
+        """
+        let services = AdbClient.parseMdnsServices(out)
+        #expect(services.map(\.port) == [37155, 5555])
+        #expect(services[0].wirelessDebugging)
+        #expect(services[0].host == "192.168.18.230")
+    }
+
+    @Test("Saved address refused (phone rebooted or moved): connect through the mDNS advert")
+    func fallback() async throws {
+        let runner = ScriptedRunner([
+            "devices -l": CommandResult(exitCode: 0, stdout: "List of devices attached\n"),
+            "connect 10.0.0.7:5555": CommandResult(exitCode: 0, stdout: "failed to connect to '10.0.0.7:5555'\n"),
+            "mdns services": CommandResult(exitCode: 0, stdout: "List\nadb-SER1-x\t_adb-tls-connect._tcp\t10.0.0.9:41234\n"),
+            "connect 10.0.0.9:41234": CommandResult(exitCode: 0, stdout: "connected to 10.0.0.9:41234\n"),
+        ])
+        let store = MemoryPhoneStore("10.0.0.7")
+        let phone = try await PhoneLocator(adb: AdbClient(adbPath: "adb", runner: runner), store: store).locate()
+        #expect(phone.serial == "10.0.0.9:41234")
+        #expect(phone.transport == .wifi)
+        #expect(store.address == "10.0.0.9")
+    }
+}

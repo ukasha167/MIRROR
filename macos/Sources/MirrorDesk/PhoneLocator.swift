@@ -70,6 +70,16 @@ public struct PhoneLocator: Sendable {
             return PhoneEndpoint(serial: serial, transport: .wifi, model: model ?? "Phone")
         }
 
+        // The saved address failed: the phone rebooted (adb tcpip is off) or got a new
+        // address. Ask adb's mDNS browser for a phone advertising adb on the LAN.
+        for service in (try? await adb.mdnsServices()) ?? [] {
+            guard (try? await adb.connect(host: service.host, port: service.port)) == true else { continue }
+            store.saveAddress(service.host)
+            let serial = "\(service.host):\(service.port)"
+            let model = (try? await adb.devices())?.first { $0.serial == serial }?.model
+            return PhoneEndpoint(serial: serial, transport: .wifi, model: model ?? "Phone")
+        }
+
         throw PhoneLocatorError.noPhone
     }
 

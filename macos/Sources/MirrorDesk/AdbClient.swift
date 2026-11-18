@@ -16,6 +16,14 @@ public struct AdbDevice: Equatable, Sendable {
     public var isReady: Bool { state == "device" }
 }
 
+public struct AdbMdnsService: Equatable, Sendable {
+    /// `adb-<hardware serial>-<random>`.
+    public var instance: String
+    public var host: String
+    public var port: Int
+    public var wirelessDebugging: Bool
+}
+
 /// Thin wrapper over the `adb` command line. Parsing lives in static functions so tests can
 /// feed captured output without a phone.
 public struct AdbClient: Sendable {
@@ -56,6 +64,11 @@ public struct AdbClient: Sendable {
         return Self.connectSucceeded(out)
     }
 
+    /// Phones adb's mDNS browser has seen on the LAN.
+    public func mdnsServices() async throws -> [AdbMdnsService] {
+        Self.parseMdnsServices(try await adb(["mdns", "services"]))
+    }
+
     public func push(serial: String, local: String, remote: String) async throws {
         try await adb(["-s", serial, "push", local, remote])
     }
@@ -84,6 +97,27 @@ public struct AdbClient: Sendable {
                 .map { String($0.dropFirst("model:".count)).replacingOccurrences(of: "_", with: " ") }
             return AdbDevice(serial: fields[0], state: fields[1], model: model)
         }
+    }
+
+    /// Parses `adb mdns services`, for example:
+    /// ```
+    /// List of discovered mdns services
+    /// adb-28161FDH300LZD-oWgbVo	_adb._tcp	192.168.18.230:5555
+    /// adb-28161FDH300LZD-oWgbVo	_adb-tls-connect._tcp	192.168.18.230:37155
+    /// ```
+    /// `_adb-tls-connect` is Android's Wireless debugging; `_adb` is `adb tcpip` mode.
+    /// Pairing services (`_adb-tls-pairing`) are skipped: connecting needs a code.
+    public static func parseMdnsServices(_ output: String) -> [AdbMdnsService] {
+        output.split(whereSeparator: \.isNewline).compactMap { line in
+            let fields = line.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard fields.count >= 3, fields[1] == "_adb._tcp" || fields[1] == "_adb-tls-connect._tcp",
+                  let colon = fields[2].lastIndex(of: ":"),
+                  let port = Int(fields[2][fields[2].index(after: colon)...]) else { return nil }
+            return AdbMdnsService(instance: fields[0], host: String(fields[2][..<colon]), port: port,
+                                  wirelessDebugging: fields[1] == "_adb-tls-connect._tcp")
+        }
+        // Wireless debugging first: it survives reboots once the phone turns it back on.
+        .sorted { $0.wirelessDebugging && !$1.wirelessDebugging }
     }
 
     /// Pulls the address out of `ip -f inet addr show wlan0` (`inet 192.168.18.230/24 brd ...`).
