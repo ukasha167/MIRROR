@@ -18,6 +18,8 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
     public var onVideoDimensionsChanged: (@Sendable (CGSize) -> Void)?
     public var onStateChanged: (@Sendable (StreamState) -> Void)?
     public var onDeviceName: (@Sendable (String, VideoCodec) -> Void)?
+    /// Raw server output (stdout and stderr), in chunks as they arrive.
+    public var onServerLog: (@Sendable (String) -> Void)?
 
     private let ioQueue = DispatchQueue(label: "dev.mirror.scrcpy.stream", qos: .userInteractive)
     private let stateLock = NSLock()
@@ -34,6 +36,20 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
     private var activeSerial: String?
     private var activeAdbPath: String?
     private var pendingStartApp: String?
+    private var options = ServerOptions()
+
+    /// Session settings beyond codec and size. `serverPath` must match `serverProtocolVersion`.
+    public struct ServerOptions: Sendable, Equatable {
+        public var serverPath: String?
+        public var videoBitRate = 8_000_000
+        /// Extra `key=value` server arguments, such as `new_display=1600x1000/200`.
+        public var extraArguments: [String] = []
+        public init(serverPath: String? = nil, videoBitRate: Int = 8_000_000, extraArguments: [String] = []) {
+            self.serverPath = serverPath
+            self.videoBitRate = videoBitRate
+            self.extraArguments = extraArguments
+        }
+    }
 
     public init() {}
 
@@ -48,8 +64,10 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
         preferredCodec: VideoCodec = .h265,
         maxSize: Int = 1920,
         maxFps: Int = 60,
-        initialPackage: String? = nil
+        initialPackage: String? = nil,
+        options: ServerOptions = ServerOptions()
     ) async throws {
+        self.options = options
         do {
             try await startAttempt(serial: serial, adbPath: adbPath, codec: preferredCodec, maxSize: maxSize, maxFps: maxFps, initialPackage: initialPackage)
         } catch {
@@ -111,7 +129,7 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
         let sessionID = UUID()
         onStateChanged?(.starting)
 
-        let serverPath = try ScrcpyAdbTransport.resolveServerPath()
+        let serverPath = try options.serverPath ?? ScrcpyAdbTransport.resolveServerPath()
         try await ScrcpyAdbTransport.runAdbAsync(adbPath: adbPath, arguments: ["-s", serial, "push", serverPath, "/data/local/tmp/scrcpy-server.jar"])
 
         let localPort = try ScrcpyAdbTransport.allocateLoopbackPort()
@@ -184,9 +202,9 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
             "app_process", "/", "com.genymobile.scrcpy.Server", Self.serverProtocolVersion,
             "scid=\(scidHex)", "tunnel_forward=true", "video=true", "audio=false", "control=true",
             "video_codec=\(codec == .h265 ? "h265" : "h264")", "max_size=\(maxSize)", "max_fps=\(maxFps)",
-            "video_bit_rate=8000000", "send_dummy_byte=true", "send_device_meta=true",
+            "video_bit_rate=\(options.videoBitRate)", "send_dummy_byte=true", "send_device_meta=true",
             "send_frame_meta=true", "send_stream_meta=true"
-        ]
+        ] + options.extraArguments
         proc.arguments = ["-s", serial, "shell"] + remoteArgs
 
         let stderrPipe = Pipe()
@@ -197,6 +215,7 @@ public final class ScrcpyStreamClient: @unchecked Sendable {
         let handler: @Sendable (FileHandle) -> Void = { [weak self] handle in
             let chunk = handle.availableData
             guard !chunk.isEmpty, let self else { return }
+            self.onServerLog?(String(decoding: chunk, as: UTF8.self))
             self.stateLock.withLock {
                 if self.serverStderrBuffer.count < 8192 {
                     self.serverStderrBuffer.append(chunk)
