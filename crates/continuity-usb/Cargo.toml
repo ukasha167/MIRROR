@@ -1,0 +1,9 @@
+[package]
+name = "continuity-usb"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "3-Tier Wired High-Speed Transfer Engine (CDC-NCM, ADB Burst + Sync v2 LZ4, Pipelined MTP)"
+
+[dependencies]
+thiserror = "2.0.21"

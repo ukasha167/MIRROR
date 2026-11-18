@@ -1,0 +1,73 @@
+namespace continuity_core {
+    string uniffi_contract_version();
+};
+
+[Error]
+enum CoreFfiError {
+    "Proto",
+    "Keystore",
+    "DeviceNotPaired",
+    "ClipboardPrivacyBlocked",
+    "ResourceBudgetExceeded",
+    "OfferNotFound",
+};
+
+enum AppleSiliconGeneration {
+    "M1",
+    "M2",
+    "M3OrNewer",
+};
+
+enum VideoCodecPreference {
+    "H265",
+    "H264",
+};
+
+dictionary ResourceSnapshot {
+    u64 macos_rss_bytes;
+    f32 macos_cpu_percent;
+    f32 macos_gpu_percent;
+    boolean is_session_active;
+    u32 android_idle_wakelocks;
+    u32 android_idle_multicast_locks;
+};
+
+callback interface KeystoreBridge {
+    [Throws=CoreFfiError]
+    sequence<u8> load_or_create_host_cert_der();
+    [Throws=CoreFfiError]
+    void save_pinned_peer_json(string peer_json);
+    [Throws=CoreFfiError]
+    string? load_pinned_peer_json(string device_id);
+    [Throws=CoreFfiError]
+    boolean remove_pinned_peer(string device_id);
+    [Throws=CoreFfiError]
+    sequence<string> list_pinned_peers_json();
+};
+
+interface ResourceBudgetMonitor {
+    constructor(AppleSiliconGeneration chip_generation);
+    VideoCodecPreference preferred_video_codec();
+    [Throws=CoreFfiError]
+    void verify_snapshot(ResourceSnapshot snapshot);
+};
+
+interface PairedDeviceStore {
+    sequence<u8> local_cert_sha256();
+    [Throws=CoreFfiError]
+    boolean unpair_peer(string device_id);
+};
+
+interface ContinuityEngine {
+    [Throws=CoreFfiError]
+    constructor(
+        string device_id,
+        string device_name,
+        AppleSiliconGeneration chip_generation,
+        KeystoreBridge keystore
+    );
+    void set_allow_concealed_clipboard(boolean allow);
+    [Throws=CoreFfiError]
+    void check_resource_budget(ResourceSnapshot snapshot);
+    sequence<sequence<u8>> drain_outbound_frames();
+};

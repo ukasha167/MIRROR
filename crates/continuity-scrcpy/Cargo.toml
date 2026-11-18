@@ -1,0 +1,9 @@
+[package]
+name = "continuity-scrcpy"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "scrcpy v3.x-v5.0 wire protocol demuxer, control serializer, and session builder"
+
+[dependencies]
+thiserror = "2.0"

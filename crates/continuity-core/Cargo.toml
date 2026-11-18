@@ -1,0 +1,16 @@
+[package]
+name = "continuity-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "UniFFI-ready facade, Keychain/Keystore bridge, paired device store, resource budget monitor, and session multiplexer"
+
+[lib]
+name = "continuity_core"
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[dependencies]
+continuity-proto = { path = "../continuity-proto" }
+thiserror = "2.0.21"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
