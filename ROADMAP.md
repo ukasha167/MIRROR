@@ -59,17 +59,26 @@ Goal: a menu bar app you use daily.
 - Files: drag onto the mirror window to push into `Download/` (scrcpy already does this). Bundle NearDrop for Quick Share from the phone.
 - Tests: each item above gets a manual check on the Pixel plus scripted checks like the ones in this file.
 
-### Phase 2: no cable, survives reboot
+### Phase 2: usable every day
+
+Reordered on 2026-11-19 after the Phase 1 hand test. Wi-Fi already works, so the old Phase 2 (cable-free after reboot) moves to Phase 3. Every item below comes from that test.
+
+| Test note | Cause | Fix |
+| --- | --- | --- |
+| Desk mode: Back, Home and Recents vanish when the phone locks | Android hides the desktop taskbar while the keyguard shows | Native window with its own Back, Home, Recents bar. Keys go to the virtual display, which stays unlocked. |
+| Desk mode: swiping the status bar opens it on the phone | The notification shade only exists on the phone's own screen | No shade button in desk mode. Phone notifications on the Mac stay in Phase 4. |
+| Mirror stutters | SDL window, H.264 at 8 Mbit/s | Native window: H.265, 16 Mbit/s, VideoToolbox into Metal |
+| Trackpad scroll stops dead | scrcpy sends wheel events; Android does not fling wheel scrolls | Two-finger trackpad scroll becomes a one-finger touch drag, so Android flings it like a real swipe. A mouse wheel still sends wheel events. |
+| Two power presses to use the phone after mirroring | Under investigation. A clean session end restores the panel (checked on the Pixel). | See HANDOFF.md |
+| Dropped files show no progress | scrcpy pushes in the background with no feedback | Our own adb sync push with a progress bar in the window |
+| NearDrop is a second menu bar icon | It ships as its own app | Build NearDrop's `NearbyShare` code into Mirror; transfers show in Mirror's menu and notifications |
+
+### Phase 3: no cable, survives reboot; window polish
 
 - Small Android companion app: one-time `pm grant ... WRITE_SECURE_SETTINGS`, then it can turn on wireless debugging on networks you approved.
 - Mac finds the phone through `_adb-tls-connect._tcp` mDNS and reconnects on its own.
 - Quick Settings tile on the phone: "Use on Mac".
-
-### Phase 3: native Mac experience
-
-- Native window with VideoToolbox decoding (reuse `macos/Sources/MirrorRenderer`) in place of the SDL window.
-- Trackpad scroll and pinch, Mac keyboard shortcuts, one Mac window per phone app on its own virtual display.
-- Resize the virtual display when you resize the window.
+- Pinch to zoom, one Mac window per phone app on its own virtual display, resize the virtual display with the window.
 
 ### Phase 4: extras
 
