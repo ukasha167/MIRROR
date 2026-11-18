@@ -75,10 +75,16 @@ Reordered on 2026-11-19 after the Phase 1 hand test. Wi-Fi already works, so the
 
 ### Phase 3: no cable, survives reboot; window polish
 
-- Small Android companion app: one-time `pm grant ... WRITE_SECURE_SETTINGS`, then it can turn on wireless debugging on networks you approved.
-- Mac finds the phone through `_adb-tls-connect._tcp` mDNS and reconnects on its own.
-- Quick Settings tile on the phone: "Use on Mac".
-- Pinch to zoom, one Mac window per phone app on its own virtual display, resize the virtual display with the window.
+Started 2026-11-19 together with the fixes from the Phase 2 hand test (see HANDOFF.md).
+
+| Item | State |
+| --- | --- |
+| Mac finds the phone through adb mDNS (`_adb-tls-connect._tcp`, `_adb._tcp`) when the saved address fails | done |
+| Pinch to zoom | done, needs a hand test |
+| One Mac window per phone app on its own virtual display | done |
+| Resize the desk virtual display with the window | done, needs a hand test |
+| Android companion app: one-time `pm grant ... WRITE_SECURE_SETTINGS`, then it turns on wireless debugging on approved networks after a reboot | not started |
+| Quick Settings tile on the phone: "Use on Mac" | not started |
 
 ### Phase 4: extras
 

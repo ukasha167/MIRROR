@@ -1,45 +1,44 @@
 # Handoff
 
-Last updated 2026-11-19. Read `ROADMAP.md` first; this file says where Phase 2 stands. Phase 1 is committed.
+Last updated 2026-11-19. Read `ROADMAP.md` first. Phases 1 and 2 are committed; Phase 3 is under way.
 
-## Phase 2 status
+## Phase 2 hand test results and fixes
 
-Every item comes from the Phase 1 hand test. "Checked" means a scripted or screenshot check on the Pixel 7 Pro over USB. Nothing below has had a full hand test yet.
+| Hand test note | Cause | Fix | Checked how |
+| --- | --- | --- | --- |
+| Desk mode: dock and home screen icons gone while locked | Android hides the desktop launcher's icons and taskbar behind the keyguard | Mac-drawn launcher (search, 132 apps with icons) over the video, and a dock of apps opened from the Mac under it. Home shows the launcher. | Screenshot with `isKeyguardShowing=true`: all icons drawn |
+| Desk mode: Apps button did nothing | scrcpy-server deletes its jar at start, so the app list ran against a missing file and returned nothing | Listing pushes its own copy (`mirror-apps.jar`, `cleanup=false`). Patch 0003 adds `app_icons_dir`, which writes each app's icon as a PNG. | Same screenshot |
+| Transfer slows the mirror | adb carries the push and the video over one connection; Wi-Fi push measured 6 MB/s on this network | Push capped at 3 MB/s over Wi-Fi while a mirror is open; Wi-Fi video 8 Mbit/s instead of 16 | `Pacer` unit test only. Needs a hand test. |
+| Plugging in the cable mid-transfer should use it | The push kept its Wi-Fi serial | When the phone moves from Wi-Fi to USB, the file in flight starts again over USB. A failed file is retried once on whatever transport is current. Open windows also move to USB. | Unit tests only |
+| Window got wider with the transfer bar and stayed wide | The bar's text pushed the window's minimum width | Bar removed. Progress is in the menu bar title ("42%") and the menu, with Stop Sending. | Builds; needs a look |
+| Power press ends the mirror | We closed the window on purpose in Phase 2 | First press wakes the phone, turns its panel on, mirror keeps going. Later presses are left alone. | Sleep then wake with `input keyevent`: window stayed open. A real press needs a hand test. |
+| Unplugging the cable ends the mirror | The stream died with the USB transport | Window shows "Reconnecting" and starts a new session over USB or Wi-Fi as soon as the phone is found. Desk mode reopens the last app. | `adb reconnect` mid-session: window stayed open, new session started |
 
-| Test note | What changed | Checked how |
-| --- | --- | --- |
-| Mirror stutters | Native window (`MirrorWindowController`) replaces the scrcpy SDL window: H.265, 16 Mbit/s, 60 fps, VideoToolbox into Metal | `mirror-desk stream-check` decodes 886x1920 (panel-off) and 1600x1000 (desk); screenshots of both windows show live video |
-| Trackpad scroll stops dead | `TrackpadScrollTranslator`: two-finger scroll becomes a one-finger touch drag that Android flings; momentum events dropped; mouse wheel unchanged | unit tests only. Fling feel needs a hand test. |
-| Desk mode loses Back/Home/Recents when locked | Title bar buttons. Desk mode: Back (key), Home (starts `SECONDARY_HOME` on the virtual display), Apps menu (scrcpy START_APP). Panel-off: Back, Home, Recents, Notifications keys. Cmd+B/H/S/N/K. | With the keyguard showing: `input -d <vd> keyevent` Back closed Settings; Home and APP_SWITCH keys did nothing; the home intent and START_APP both worked (`stream-check desk com.google.android.calculator` PASS) |
-| Status bar swipe opens the shade on the phone | Desk mode has no shade button; the shade only exists on the phone's own screen | n/a |
-| Two power presses after mirroring | Cause found: a press mid-session takes the phone from Awake to Dozing with the panel still off. `PowerKeyWatcher` reads `getevent`, sends WAKEUP and ends the session | Simulated with `input keyevent SLEEP`: Dozing, panel off; WAKEUP: Awake, panel on. A real press needs a hand test. |
-| Dropped files show no progress | `AdbSyncPush` speaks adb's sync protocol; `TransferBar` shows name, bytes and a stop button; files queue | `mirror-desk push` sent 100 MB in 3.1 s over USB; size matched on the phone. MediaStore indexed it with no scan. |
-| NearDrop is a second menu bar icon | `macos/Vendor/NearbyShare` (NearDrop's code, Unlicense) builds into Mirror. Consent is an alert with the PIN; status is a menu line. NearDrop.app, its build script and `QuickShareLauncher` are gone. | Mirror's `_FC9F5ED42C8A._tcp` advert appears while it runs and goes when it quits. No transfer from the phone yet. |
+Desk mode now sizes the virtual display from the window: 1.5 phone pixels per Mac point at 240 dpi, so one dp is one Mac point. A 1008 x 630 point window gave a 1512 x 944 display.
 
-`swift test` in `macos/`: 64 tests pass.
+`swift test` in `macos/`: 76 tests pass.
 
 ## New tools
 
-- `swift run mirror-window [desk]`: opens one native window without the menu app. It has its own target because `NSApplication.run()` inside async top-level code blocks the main actor, and the window's tasks never start.
-- `mirror-desk stream-check [desk [package]]`, `mirror-desk push <file>`. `make phone-check` runs the desk app-launch check too.
-
-## Things learned
-
-- Android drops HOME and APP_SWITCH while the keyguard shows, even for an `ALWAYS_UNLOCKED` virtual display. BACK still works.
-- The desktop launcher on the virtual display shows only wallpaper while locked; its taskbar returns once the phone unlocks.
-- The server prints `New display: WxH/dpi (id=N)`; that id is the only way we learn the virtual display.
-- `screen_off_timeout` is in ms as a server option, seconds as a client flag.
-- `timeout` is not installed on this Mac; scripts must not use it.
+- `mirror-window app <package>`: one app in its own window.
+- `make scrcpy-server` now applies patch 0003 (app icons). The built server is in `build/`.
 
 ## Hand checks to do
 
-1. `swift run MirrorApp`, Open Desk Mode, lock the phone. Use Back, Home and the Apps menu.
-2. Two-finger scroll a long list in both windows. Does it fling like a phone swipe? Does the edge restart feel smooth?
-3. Panel-off mirror, then press the phone's power button once. The phone should light up and the Mac window close.
-4. Drop a 1 GB file on a window over Wi-Fi; watch the bar, then press stop mid-way.
-5. Share a photo from the phone to the Mac with Quick Share; accept the alert.
-6. Rotate the phone during panel-off mirroring; the window should reshape.
+1. Desk mode with the phone locked: launcher, search (type then Return), dock, Home, right-click "Open in New Window".
+2. Drag the desk window's corner. The phone apps should re-layout to the new size about 150 ms after you stop.
+3. Pinch in Google Maps or Photos.
+4. Panel-off mirror, press the power key once: phone lights up, Mac window keeps mirroring.
+5. Start a 1 GB drop over Wi-Fi with a mirror open: is the video smooth? Plug the cable in mid-way: the menu should switch to "over USB" and finish fast.
+6. Pull the cable during a USB mirror: "Reconnecting", then video over Wi-Fi.
+
+## Things learned
+
+- scrcpy-server unlinks its own jar at start unless `cleanup=false`.
+- `flex_display=true` plus `RESIZE_DISPLAY` (type 21, two big-endian u16) resizes a virtual display live.
+- `screencapture -l <window id>` captures a window on another Space; the window id comes from `CGWindowListCopyWindowInfo`.
+- Scripted window resizing needs Accessibility permission, which this terminal lacks.
 
 ## Next
 
-Hand checks above, then Phase 3 (cable-free after reboot).
+Hand checks above, then the Android companion app and Quick Settings tile (ROADMAP Phase 3).
