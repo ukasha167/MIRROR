@@ -6,6 +6,12 @@ public protocol AdbByteStream: AnyObject {
     /// Reads exactly `count` bytes, or fewer if the peer closed.
     func read(_ count: Int) throws -> Data
     func close()
+    /// Unblocks a read or write running on another thread. Safe to call more than once.
+    func abort()
+}
+
+public extension AdbByteStream {
+    func abort() {}
 }
 
 /// Pushes one file with adb's sync protocol and reports bytes sent. `adb push` prints progress
@@ -17,11 +23,15 @@ public struct AdbSyncPush {
     let connect: () throws -> AdbByteStream
     /// Bytes per second to stay under, read before each chunk; nil sends at full speed.
     let rateLimit: () -> Int?
+    /// Gets each stream as it opens, so a Stop click can abort a write blocked on a slow link.
+    let onStream: (AdbByteStream) -> Void
 
     public init(serial: String, rateLimit: @escaping () -> Int? = { nil },
+                onStream: @escaping (AdbByteStream) -> Void = { _ in },
                 connect: @escaping () throws -> AdbByteStream = { try AdbSocket.connect() }) {
         self.serial = serial
         self.rateLimit = rateLimit
+        self.onStream = onStream
         self.connect = connect
     }
 
@@ -33,35 +43,68 @@ public struct AdbSyncPush {
     @discardableResult
     public func push(_ file: URL, to remoteDir: String = downloadDir, progress: Progress) throws -> String {
         let remote = "\(remoteDir)/\(file.lastPathComponent)"
+        let size = try Self.fileSize(file)
+        try push(file, range: 0..<size, to: remote) { progress($0, size) }
+        return remote
+    }
+
+    /// Sends bytes `range` of `file` as the whole of `remotePath`. `progress` gets bytes sent
+    /// so far in this range; return false to cancel.
+    public func push(_ file: URL, range: Range<Int64>, to remotePath: String, progress: (Int64) -> Bool) throws {
         guard let handle = try? FileHandle(forReadingFrom: file) else {
             throw AdbSyncError.localFile(file.path)
         }
         defer { try? handle.close() }
+        try handle.seek(toOffset: UInt64(range.lowerBound))
         let attrs = try? FileManager.default.attributesOfItem(atPath: file.path)
-        let total = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
         let mtime = UInt32(((attrs?[.modificationDate] as? Date) ?? Date()).timeIntervalSince1970)
 
         let stream = try connect()
+        onStream(stream)
         defer { stream.close() }
         try host(stream, "host:transport:\(serial)")
         try host(stream, "sync:")
-        try stream.write(AdbSyncWire.send(remotePath: remote))
+        try stream.write(AdbSyncWire.send(remotePath: remotePath))
 
         var sent: Int64 = 0
         var pacer = Pacer()
-        while true {
+        let length = range.upperBound - range.lowerBound
+        while sent < length {
             pacer.wait(rate: rateLimit())
-            let chunk = try handle.read(upToCount: AdbSyncWire.maxChunk) ?? Data()
+            let want = Int(min(Int64(AdbSyncWire.maxChunk), length - sent))
+            let chunk = try handle.read(upToCount: want) ?? Data()
             if chunk.isEmpty { break }
             try stream.write(AdbSyncWire.data(chunk))
             sent += Int64(chunk.count)
             pacer.sent(chunk.count)
             // Closing mid-transfer makes adbd drop the partial file.
-            if !progress(sent, total) { throw CancellationError() }
+            if !progress(sent) { throw CancellationError() }
         }
         try stream.write(AdbSyncWire.done(mtime: mtime))
         try syncReply(stream)
-        return remote
+    }
+
+    static func fileSize(_ file: URL) throws -> Int64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
+              let size = attrs[.size] as? NSNumber else { throw AdbSyncError.localFile(file.path) }
+        return size.int64Value
+    }
+
+    /// Runs `command` with adb's shell service and returns its output once the phone closes the
+    /// stream. Shell v1 gives no exit code, so callers append `; echo rc=$?` when they need one.
+    public func shell(_ command: String) throws -> String {
+        let stream = try connect()
+        onStream(stream)
+        defer { stream.close() }
+        try host(stream, "host:transport:\(serial)")
+        try host(stream, "shell:\(command)")
+        var out = Data()
+        while true {
+            let piece = try stream.read(4096)
+            if piece.isEmpty { break }
+            out += piece
+        }
+        return String(decoding: out, as: UTF8.self)
     }
 
     private func host(_ stream: AdbByteStream, _ service: String) throws {
@@ -185,5 +228,21 @@ public final class AdbSocket: AdbByteStream {
         return out.prefix(got)
     }
 
-    public func close() { Darwin.close(fd) }
+    private let closeLock = NSLock()
+    private var closed = false
+
+    public func close() {
+        closeLock.withLock {
+            guard !closed else { return }
+            closed = true
+            Darwin.close(fd)
+        }
+    }
+
+    /// Never touches the descriptor after `close`, since the number may belong to a new socket.
+    public func abort() {
+        closeLock.withLock {
+            if !closed { _ = Darwin.shutdown(fd, SHUT_RDWR) }
+        }
+    }
 }

@@ -9,7 +9,7 @@ import CoreVideo
 //   swift run mirror-desk clipboard-roundtrip phone clipboard both ways, Mac pasteboard untouched
 //   swift run mirror-desk stream-check [desk [package]]  native decoder gets frames for 5 s;
 //                                             with a package, it opens on the virtual display
-//   swift run mirror-desk push <file>         adb sync push to Download/ with progress
+//   swift run mirror-desk push <file>         resumable push to Download/ with progress
 
 let usage = "usage: mirror-desk locate | clipboard-roundtrip | stream-check [desk [package]] | push <file>"
 
@@ -67,18 +67,27 @@ let args = CommandLine.arguments.dropFirst()
 switch args.first {
 case "push":
     guard let path = args.dropFirst().first else { fail(usage) }
-    let phone: PhoneEndpoint
-    do { phone = try await PhoneLocator(adb: makeAdb()).locate() } catch { fail("\(error)") }
+    // MIRROR_SERIAL picks a transport; MIRROR_STOP_AT=<percent> stops there, as a pulled cable
+    // would, so a second run can show the resume.
+    let env = ProcessInfo.processInfo.environment
+    let serial: String
+    if let forced = env["MIRROR_SERIAL"] {
+        serial = forced
+    } else {
+        do { serial = try await PhoneLocator(adb: makeAdb()).locate().serial } catch { fail("\(error)") }
+    }
+    let stopAt = env["MIRROR_STOP_AT"].flatMap(Int.init) ?? 101
     let started = Date()
     var lastPercent = -1
     do {
-        let remote = try AdbSyncPush(serial: phone.serial).push(URL(fileURLWithPath: path)) { sent, total in
+        let push = AdbResumablePush(sync: AdbSyncPush(serial: serial))
+        let remote = try push.push(URL(fileURLWithPath: path)) { sent, total in
             let percent = total > 0 ? Int(sent * 100 / total) : 100
             if percent / 10 != lastPercent / 10 { print("\(percent)%"); lastPercent = percent }
-            return true
+            return percent < stopAt
         }
         let seconds = Date().timeIntervalSince(started)
-        print("PASS: \(remote) in \(String(format: "%.1f", seconds)) s via \(phone.transport)")
+        print("PASS: \(remote) in \(String(format: "%.1f", seconds)) s via \(serial)")
     } catch { fail("\(error)") }
 
 case "stream-check":

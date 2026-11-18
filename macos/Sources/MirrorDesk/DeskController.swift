@@ -43,10 +43,13 @@ public final class DeskController: ObservableObject {
     public init() {
         let target = self.target
         files = FileDropQueue { url, progress in
-            let serial = target.snapshot.serial
-            return try AdbSyncPush(serial: serial, rateLimit: { target.snapshot.limit }).push(url, progress: progress)
+            try target.pusher().push(url, progress: progress)
         }
         files.onEvent = { [weak self] in self?.transferChanged($0) }
+        files.onAbort = { target.abort() }
+        files.onDiscard = { url in
+            DispatchQueue.global(qos: .utility).async { target.pusher().discard(url) }
+        }
         files.onRetry = { [weak self] in Task { await self?.refresh() } }
         quickShareReceiver.onChange = { [weak self] in self?.quickShare = $0 }
         quickShareReceiver.start()
@@ -105,7 +108,8 @@ public final class DeskController: ObservableObject {
             let switchedToUsb = phone?.serial != found.serial && found.transport == .usb && phone?.transport == .wifi
             phone = found
             updateTarget()
-            // A push over Wi-Fi starts again over the cable, about 30 times faster here.
+            // A push over Wi-Fi moves to the cable, about 5 times faster here, and continues
+            // from the last finished segment.
             if switchedToUsb, files.isSending { files.restartCurrent() }
             windows.values.forEach { $0.use(found) }
             if server != nil { status = "Ready" }
@@ -186,10 +190,26 @@ public final class DeskController: ObservableObject {
         target.set(serial: phone.serial, limit: limited ? Self.wifiPushLimitWithMirror : nil)
     }
 
-    /// Short menu bar title while sending, such as "42%".
+    /// Short menu bar title while sending, such as "42%". The menu bar item draws it at a
+    /// fixed width, so the icons beside it stay put while the number changes.
     public var transferBadge: String? {
-        if case .progress(let status) = transfer { return "\(Int(status.fraction * 100))%" }
+        if case .progress(let status) = transfer { return Self.percent(status.fraction) }
         return nil
+    }
+
+    /// "  4%", " 42%", "100%": padded with figure spaces (U+2007, as wide as a digit) so the
+    /// title keeps one width from 0 to 100.
+    static func percent(_ fraction: Double) -> String {
+        let digits = String(Int((fraction * 100).rounded(.down)).clamped(to: 0...100))
+        return String(repeating: "\u{2007}", count: 3 - digits.count) + digits + "%"
+    }
+
+    /// File name cut in the middle to 32 characters, keeping the extension. A long name made
+    /// the whole menu as wide as the screen (hand test).
+    static func short(_ name: String, limit: Int = 32) -> String {
+        guard name.count > limit else { return name }
+        let tail = 12
+        return "\(name.prefix(limit - tail - 1))…\(name.suffix(tail))"
     }
 
     /// Menu line for the transfer, or nil when there is nothing to show.
@@ -199,9 +219,10 @@ public final class DeskController: ObservableObject {
         case .progress(let s):
             let more = s.queued > 0 ? " (+\(s.queued) more)" : ""
             let via = phone?.transport == .usb ? "USB" : "Wi-Fi"
-            return "Sending \(s.fileName)\(more): \(Self.bytes(s.sent)) of \(Self.bytes(s.total)) over \(via)"
-        case .finished(let name, _): return "\(name) is in Download on the phone"
-        case .failed(let name, let message): return "\(name) not sent: \(message)"
+            return "Sending \(Self.short(s.fileName))\(more): \(Self.bytes(s.sent)) of \(Self.bytes(s.total)) over \(via)"
+        case .finished(let name, _): return "\(Self.short(name)) is in Download on the phone"
+        case .failed(let name, let message): return "\(Self.short(name)) not sent: \(message)"
+        case .stopped(let name): return "Stopped sending \(Self.short(name))"
         }
     }
 
@@ -262,6 +283,21 @@ final class TransferTarget: @unchecked Sendable {
     private let lock = NSLock()
     private var serial = ""
     private var limit: Int?
+    private var stream: AdbByteStream?
+
+    /// A push to the current serial. After a transport switch the queue restarts the file with
+    /// a new pusher, which resumes from the last segment on the phone.
+    func pusher() -> AdbResumablePush {
+        let serial = snapshot.serial
+        return AdbResumablePush(sync: AdbSyncPush(
+            serial: serial, rateLimit: { [weak self] in self?.snapshot.limit },
+            onStream: { [weak self] stream in self?.lock.withLock { self?.stream = stream } }))
+    }
+
+    /// Unblocks the socket the push thread is using.
+    func abort() {
+        lock.withLock { stream }?.abort()
+    }
 
     func set(serial: String, limit: Int?) {
         lock.withLock {
@@ -271,4 +307,8 @@ final class TransferTarget: @unchecked Sendable {
     }
 
     var snapshot: (serial: String, limit: Int?) { lock.withLock { (serial, limit) } }
+}
+
+extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self { min(max(self, range.lowerBound), range.upperBound) }
 }

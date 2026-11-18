@@ -17,6 +17,8 @@ public final class FileDropQueue {
         case progress(Status)
         case finished(fileName: String, remotePath: String)
         case failed(fileName: String, message: String)
+        /// The user stopped it.
+        case stopped(fileName: String)
         case idle
     }
 
@@ -24,8 +26,16 @@ public final class FileDropQueue {
     /// Called before the one automatic retry of a failed file, so the owner can look for the
     /// phone on another transport.
     public var onRetry: (() -> Void)?
+    /// Unblocks the push thread at once (closes its socket), for Stop and transport switches.
+    public var onAbort: (() -> Void)?
+    /// The user stopped `url`; the owner deletes its unfinished copy on the phone.
+    public var onDiscard: ((URL) -> Void)?
     public var retryDelay: TimeInterval = 3
+    /// The file that already used its retry. Cleared when an attempt moves the file forward,
+    /// since a resumed push that keeps progressing is worth another try.
     private var retried: URL?
+    /// Bytes done when this attempt's first progress report came in.
+    private var attemptStart: Int64?
 
     private let push: @Sendable (URL, @escaping AdbSyncPush.Progress) throws -> String
     private var pending: [URL] = []
@@ -53,6 +63,12 @@ public final class FileDropQueue {
         pending.removeAll()
         restart = false
         cancel.set()
+        onAbort?()
+        guard let current else { return }
+        // Report the stop now. The push thread may take seconds to notice on a slow link,
+        // and the menu kept showing "Sending" until it did (hand test).
+        currentID += 1
+        onEvent?(.stopped(fileName: current.lastPathComponent))
     }
 
     /// Whether a file is in flight.
@@ -65,6 +81,7 @@ public final class FileDropQueue {
         guard current != nil else { return }
         restart = true
         cancel.set()
+        onAbort?()
     }
 
     private func next() {
@@ -83,6 +100,7 @@ public final class FileDropQueue {
         let cancel = self.cancel
         currentID += 1
         let id = currentID
+        attemptStart = nil
         // Progress fires per 64 KiB chunk; forward about 20 updates a second at most.
         let throttle = ProgressThrottle(interval: 0.05)
 
@@ -91,8 +109,13 @@ public final class FileDropQueue {
                 try push(url) { sent, total in
                     if throttle.shouldFire(done: sent >= total) {
                         Task { @MainActor in
-                            guard self?.currentID == id else { return }
-                            self?.onEvent?(.progress(Status(fileName: name, sent: sent, total: total, queued: queued)))
+                            guard let self, self.currentID == id else { return }
+                            if let start = self.attemptStart {
+                                if sent > start, self.retried == url { self.retried = nil }
+                            } else {
+                                self.attemptStart = sent
+                            }
+                            self.onEvent?(.progress(Status(fileName: name, sent: sent, total: total, queued: queued)))
                         }
                     }
                     return !cancel.isSet
@@ -107,11 +130,13 @@ public final class FileDropQueue {
                 case .failure(is CancellationError) where self.restart:
                     self.restart = false
                     self.pending.insert(url, at: 0)
-                case .failure(is CancellationError): break
                 case .failure where self.restart:
                     // The old transport died mid-write (cable pulled): send again on the new one.
                     self.restart = false
                     self.pending.insert(url, at: 0)
+                case .failure where cancel.isSet:
+                    // Stopped by the user (already reported), possibly mid-write.
+                    self.onDiscard?(url)
                 case .failure where self.retried != url:
                     // Most failures mid-file are a lost transport (cable pulled, Wi-Fi dropped).
                     // Try once more after the controller has had time to find the phone again.

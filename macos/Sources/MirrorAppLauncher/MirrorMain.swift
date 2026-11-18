@@ -19,7 +19,10 @@ struct MirrorMainApp: App {
         } label: {
             // While a file goes to the phone, the menu bar shows how far it has got.
             if let badge = desk.transferBadge {
-                Label(badge, systemImage: "arrow.up.circle").labelStyle(.titleAndIcon)
+                // Tabular digits plus the padded badge keep the item one width (hand test: it
+                // jittered as the number changed).
+                Label { Text(badge).monospacedDigit() } icon: { Image(systemName: "arrow.up.circle") }
+                    .labelStyle(.titleAndIcon)
             } else {
                 Image(systemName: "iphone.and.arrow.forward")
             }
