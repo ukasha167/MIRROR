@@ -1,0 +1,123 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/Options.java b/server/src/main/java/com/genymobile/scrcpy/Options.java
+index 26a6ba9..07395db 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/Options.java
++++ b/server/src/main/java/com/genymobile/scrcpy/Options.java
+@@ -80,6 +80,7 @@ public class Options {
+     private boolean listCameras;
+     private boolean listCameraSizes;
+     private boolean listApps;
++    private String appIconsDir; // with list_apps: also write each app's icon as <dir>/<package>.png
+ 
+     // Options not used by the scrcpy client, but useful to use scrcpy-server directly
+     private boolean sendDeviceMeta = true; // send device name and size
+@@ -303,6 +304,10 @@ public class Options {
+         return listApps;
+     }
+ 
++    public String getAppIconsDir() {
++        return appIconsDir;
++    }
++
+     public boolean getSendDeviceMeta() {
+         return sendDeviceMeta;
+     }
+@@ -483,6 +488,9 @@ public class Options {
+                 case "list_apps":
+                     options.listApps = Boolean.parseBoolean(value);
+                     break;
++                case "app_icons_dir":
++                    options.appIconsDir = value;
++                    break;
+                 case "camera_id":
+                     if (!value.isEmpty()) {
+                         options.cameraId = value;
+diff --git a/server/src/main/java/com/genymobile/scrcpy/Server.java b/server/src/main/java/com/genymobile/scrcpy/Server.java
+index d7d1a76..6a02ed2 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/Server.java
++++ b/server/src/main/java/com/genymobile/scrcpy/Server.java
+@@ -16,6 +16,7 @@ import com.genymobile.scrcpy.model.ConfigurationException;
+ import com.genymobile.scrcpy.model.NewDisplay;
+ import com.genymobile.scrcpy.opengl.OpenGLRunner;
+ import com.genymobile.scrcpy.util.Ln;
++import com.genymobile.scrcpy.util.AppIcons;
+ import com.genymobile.scrcpy.util.LogUtils;
+ import com.genymobile.scrcpy.video.CameraCapture;
+ import com.genymobile.scrcpy.video.NewDisplayCapture;
+@@ -264,6 +265,9 @@ public final class Server {
+                 Workarounds.apply();
+                 Ln.i("Processing Android apps... (this may take some time)");
+                 Ln.i(LogUtils.buildAppListMessage());
++                if (options.getAppIconsDir() != null) {
++                    AppIcons.write(options.getAppIconsDir());
++                }
+             }
+             // Just print the requested data, do not mirror
+             return;
+diff --git a/server/src/main/java/com/genymobile/scrcpy/util/AppIcons.java b/server/src/main/java/com/genymobile/scrcpy/util/AppIcons.java
+new file mode 100644
+index 0000000..a7da323
+--- /dev/null
++++ b/server/src/main/java/com/genymobile/scrcpy/util/AppIcons.java
+@@ -0,0 +1,62 @@
++package com.genymobile.scrcpy.util;
++
++import com.genymobile.scrcpy.FakeContext;
++import com.genymobile.scrcpy.device.Device;
++import com.genymobile.scrcpy.model.DeviceApp;
++
++import android.content.Intent;
++import android.content.pm.PackageManager;
++import android.graphics.Bitmap;
++import android.graphics.Canvas;
++import android.graphics.drawable.Drawable;
++
++import java.io.File;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.io.OutputStream;
++
++/**
++ * Writes the launcher icon of every launchable app as {@code <dir>/<package>.png}, so a desk mode client can draw its own
++ * launcher while the phone is locked (Android hides the desktop launcher's icons behind the keyguard).
++ */
++public final class AppIcons {
++
++    public static final int SIZE = 96;
++
++    private AppIcons() {
++        // not instantiable
++    }
++
++    public static void write(String dir) {
++        File folder = new File(dir);
++        if (!folder.isDirectory() && !folder.mkdirs()) {
++            Ln.w("Cannot create app icon folder " + dir);
++            return;
++        }
++        PackageManager pm = FakeContext.get().getPackageManager();
++        int written = 0;
++        for (DeviceApp app : Device.listApps()) {
++            try {
++                Intent launch = Device.getLaunchIntent(pm, app.getPackageName());
++                Drawable icon = launch != null ? pm.getActivityIcon(launch) : pm.getApplicationIcon(app.getPackageName());
++                writePng(icon, new File(folder, app.getPackageName() + ".png"));
++                ++written;
++            } catch (PackageManager.NameNotFoundException | IOException | RuntimeException e) {
++                Ln.w("No icon for " + app.getPackageName() + ": " + e.getMessage());
++            }
++        }
++        Ln.i("App icons: " + written + " written to " + dir);
++    }
++
++    private static void writePng(Drawable icon, File file) throws IOException {
++        Bitmap bitmap = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888);
++        Canvas canvas = new Canvas(bitmap);
++        icon.setBounds(0, 0, SIZE, SIZE);
++        icon.draw(canvas);
++        try (OutputStream out = new FileOutputStream(file)) {
++            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
++        } finally {
++            bitmap.recycle();
++        }
++    }
++}
