@@ -1,5 +1,5 @@
 .POSIX:
-.PHONY: all check test test-rust test-macos vendor-status dev-status dev-status-json clean help scrcpy-server phone-check
+.PHONY: all check test test-rust test-macos vendor-status dev-status dev-status-json clean help scrcpy-server phone-check companion
 
 SHELL := /bin/bash
 
@@ -33,6 +33,11 @@ scrcpy-server:
 phone-check: scrcpy-server
 	@cd macos && swift build --product mirror-desk >/dev/null && .build/debug/mirror-desk locate && .build/debug/mirror-desk clipboard-roundtrip && .build/debug/mirror-desk stream-check desk com.google.android.calculator
 
+# The phone app that turns Wireless debugging on after a reboot. Needs the phone on USB.
+companion:
+	@cd android && gradle -q :companion:assembleDebug
+	@cd macos && swift run -q mirror-desk companion ../android/companion/build/outputs/apk/debug/companion-debug.apk
+
 clean:
 	@echo "Cleaning build artifacts..."
 	@cargo clean 2>/dev/null || true
@@ -46,6 +51,7 @@ help:
 	@echo "  make test            Run all automated test suites across components"
 	@echo "  make test-rust       Run cargo test --workspace"
 	@echo "  make scrcpy-server   Build patched scrcpy-server into build/"
+	@echo "  make companion       Build, install and set up the phone app (USB)"
 	@echo "  make phone-check     Scripted checks against a connected phone"
 	@echo "  make test-macos      Run swift test inside macos/"
 	@echo "  make vendor-status   Report shallow clone status of third_party repositories"

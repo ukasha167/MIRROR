@@ -89,6 +89,10 @@ public struct PhoneLocator: Sendable {
         guard let address = try? await adb.wifiAddress(serial: usb.serial) else { return }
         store.saveAddress(address)
         if alreadyOnWifi { return }
+        // Once per phone boot (the first USB locate before `adb tcpip`): grant the companion
+        // app its permissions and approve this network, so Wi-Fi works after the next
+        // reboot too. Done before `tcpip` because adbd restarts and drops USB for a second.
+        _ = await CompanionSetup(adb: adb).run(serial: usb.serial)
         do {
             try await adb.enableTcpip(serial: usb.serial, port: Self.tcpipPort)
             // adbd restarts on the phone; the USB transport drops for about a second.

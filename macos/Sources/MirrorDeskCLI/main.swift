@@ -10,8 +10,10 @@ import CoreVideo
 //   swift run mirror-desk stream-check [desk [package]]  native decoder gets frames for 5 s;
 //                                             with a package, it opens on the virtual display
 //   swift run mirror-desk push <file>         resumable push to Download/ with progress
+//   swift run mirror-desk companion [apk]     install (with an apk) and set up the phone app
+//                                             that turns Wireless debugging on after a reboot
 
-let usage = "usage: mirror-desk locate | clipboard-roundtrip | stream-check [desk [package]] | push <file>"
+let usage = "usage: mirror-desk locate | clipboard-roundtrip | stream-check [desk [package]] | push <file> | companion [apk]"
 
 func fail(_ message: String) -> Never {
     print("FAIL: \(message)")
@@ -166,6 +168,20 @@ case "clipboard-roundtrip":
     guard waitB.wait(seconds: 4) else { fail("Mac-to-phone: session B never saw \(toB)") }
     print("Mac-to-phone ok")
     print("PASS: clipboard round trip on \(phone.serial)")
+
+case "companion":
+    let adb = makeAdb()
+    guard let usb = (try? await adb.devices())?.first(where: { $0.transport == .usb && $0.isReady }) else {
+        fail("plug the phone in over USB: pm grant needs the cable or an adb connection")
+    }
+    let setup = CompanionSetup(adb: adb)
+    if CommandLine.arguments.count > 2 {
+        do { try await setup.install(serial: usb.serial, apk: CommandLine.arguments[2]) } catch { fail("\(error)") }
+        print("installed \(CommandLine.arguments[2])")
+    }
+    let outcome = await setup.run(serial: usb.serial)
+    guard case .approved = outcome else { fail("\(outcome)") }
+    print("PASS: \(outcome)")
 
 default:
     print(usage)
