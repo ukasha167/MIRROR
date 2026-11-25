@@ -1,79 +1,55 @@
-# Mirror
+# MIRROR
 
-Mirror is an Android and macOS continuity suite. It provides wireless file transfer, USB file transfer over ADB and MTP, low-latency screen mirroring with the scrcpy protocol, clipboard synchronization, and phone camera and microphone streaming via CoreMediaIO and CoreAudio.
+Use an Android phone from a Mac. Each phone app opens in its own Mac window while the phone stays locked on the desk, and the clipboard, files and audio follow. It runs over adb, by USB or Wi-Fi, with no root and nothing to install on the phone apart from an optional companion app.
 
-## Architecture
+![Swift](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)
+![Metal](https://img.shields.io/badge/Metal-VideoToolbox_H.265-A2AAAD?logo=apple&logoColor=white)
+![Kotlin](https://img.shields.io/badge/Kotlin-companion_app-7F52FF?logo=kotlin&logoColor=white)
+![scrcpy](https://img.shields.io/badge/scrcpy--server-4.1,_4_patches-2E7D32)
+![adb](https://img.shields.io/badge/adb-USB_·_Wi--Fi_·_mDNS-3DDC84?logo=android&logoColor=white)
+![Tests](https://img.shields.io/badge/Swift_tests-89_passing-2EA043)
 
-The system consists of three main platform targets and a shared systems core:
+Tested on a Pixel 7 Pro (Android 17, not rooted) and a MacBook Air on macOS 26.
 
-- Shared core (`crates/`): Written in Rust. Implements wire protocols, TLS and Noise encryption handshakes, LocalSend file transfers, ADB client commands, MTP file operations, and scrcpy frame demuxing. Exposed to native UI layers through Mozilla UniFFI.
-- macOS app (`macos/`): Written in Swift 6. Provides native AppKit and SwiftUI interfaces, hardware H.265 video decoding via VideoToolbox and Metal, Finder sidebar volume mounts via FSKit, and virtual webcam feeds via CoreMediaIO.
-- Android app (`android/`): Written in Kotlin and Jetpack Compose. Provides Material 3 interfaces, background presence monitoring via CompanionDeviceService, notification forwarding, and privileged Binder interfaces.
-- Third-party references (`third_party/`): Vendored reference repositories under permissive open-source licenses (MIT, Apache-2.0, and Unlicense).
+![MIRROR on a Mac: Calculator in the desk window with the Android taskbar and the Mac dock below it, Clock's stopwatch in its own window, the Overview the Mac draws for the two open apps, and the app drawer searching for "google"](docs/collage.jpg)
 
-## Directory layout
+## What works
 
-```text
-mirror/
-├── Cargo.toml               Rust workspace manifest
-├── Makefile                 Build and verification targets
-├── README.md                Project documentation
-├── AGENTS.md                Agent governance and routing rules
-├── plan.md                  Architecture specification
-├── scripts/                 Automation and check scripts
-│   ├── check.sh             Verification runner
-│   └── dev-status.sh        Component status reporter
-├── crates/                  Shared Rust crates
-│   ├── continuity-core      UniFFI bridge and pairing state machine
-│   ├── continuity-proto     TLS, Noise_XX, and packet multiplexing
-│   ├── continuity-wireless  LocalSend protocol and parallel TCP engine
-│   ├── continuity-usb       ADB burst mode client and MTP initiator
-│   └── continuity-scrcpy    scrcpy protocol parser and demuxer
-├── macos/                   macOS Swift 6 package and Xcode targets
-├── android/                 Android Gradle and Jetpack Compose modules
-└── third_party/             Vendored upstream reference projects
+- **Desk mode.** Phone apps run on a virtual display sized to a Mac window, while the phone itself stays locked with its screen off. Someone who picks up the phone sees the lock screen.
+- **One window per app.** `mirror-window app <package>` opens a single phone app in its own Mac window.
+- **Native mirror window.** H.265 at 16 Mbit/s, decoded by VideoToolbox and drawn with Metal. It started as scrcpy's SDL window with H.264 at 8 Mbit/s, which stuttered.
+- **Trackpad that feels like touch.** Two-finger scrolls become one-finger drags, so Android flings them like a real swipe. Pinch becomes two fingers.
+- **Back, Home and an Overview the Mac draws.** Android hides its own navigation on a virtual display behind the lock screen, and has no Recents there, so the Mac reads `dumpsys activity activities` and draws them.
+- **Clipboard both ways**, with server-side polling for the phone-to-Mac direction.
+- **Drop a file to send it**, with a progress bar. A push stopped on Wi-Fi resumes over USB, or the other way round.
+- **Quick Share from the phone**, built in from NearDrop's code.
+- **Phone audio on the Mac** as raw PCM with a 60 ms start buffer.
+- **No cable after a reboot.** The companion app turns Wireless debugging back on when the phone joins your Wi-Fi, and the Mac finds the phone again through adb mDNS.
+
+Not possible without root: apps that set `FLAG_SECURE` (most banking apps, incognito tabs) show black in every mode.
+
+## How the hard parts work
+
+**Desk mode with the phone locked.** Upstream scrcpy's virtual display goes dark about 7 seconds after the phone locks. On Android 14 and later it adds `VIRTUAL_DISPLAY_FLAG_DEVICE_DISPLAY_GROUP`, which ties the virtual screen to the phone's sleep state. Patch 0001 drops the flag, and a thread calls `IPowerManager.userActivity()` every 4 seconds so the display's own power group never sleeps. The adb shell user already holds `DEVICE_POWER` and `ADD_TRUSTED_DISPLAY`, so no root is needed.
+
+**Resumable transfers.** `adb sync` cannot write at an offset. The Mac sends a file in 32 MiB segments to a hidden partial file, splices each one in place with `dd`, and renames the file when it is complete. Switching between USB and Wi-Fi repeats at most one segment. Measured: 25 MB/s resumable, against 33 MB/s for a plain `adb sync` push. A transfer stopped at 45% on Wi-Fi resumed over USB at 42%, and the md5 matched.
+
+**Reconnecting after a reboot.** Over USB, the Mac grants the companion app `WRITE_SECURE_SETTINGS`. After a reboot, the app flips `adb_wifi_enabled` when the phone joins an approved network. It has no service and holds no wakelock. The Mac reconnects with the key it already authorised over USB, so there is no pairing code.
+
+The four scrcpy-server patches are in `patches/scrcpy-v4.1/`: desk-mode virtual display, clipboard polling, app icons, and no lock-screen presentation on the virtual display.
+
+## Build
+
+Needs Xcode, a JDK for the scrcpy-server build, and a phone with USB debugging on.
+
+```bash
+make scrcpy-server                          # build the patched server
+cd macos && swift build --product mirror-desk
+swift test                                  # 89 tests
+make phone-check                            # locate, clipboard round trip, desk stream
+make companion                              # the Android companion app
 ```
 
-## Prerequisites
+## History
 
-To build and run tests across the workspace, install:
-
-1. Rust toolchain (stable, 2021 edition or newer):
-   `rustup default stable`
-2. Apple Swift toolchain (Swift 6 or newer on macOS 15+):
-   `xcode-select --install`
-3. GNU Make or BSD Make (`make`)
-
-## Commands
-
-Use the Makefile targets for common tasks:
-
-- `make check`: Run all repository checks (shell syntax, Rust workspace check, macOS package build, vendor status).
-- `make test`: Run all unit and integration tests across Rust and Swift.
-- `make test-rust`: Run `cargo test --workspace`.
-- `make test-macos`: Run `swift test` inside `macos/`.
-- `make vendor-status`: Inspect status of upstream reference clones in `third_party/`.
-- `make dev-status`: Display component readiness across crates, macos, android, and third_party.
-- `make dev-status-json`: Output status in JSON format for automated tooling.
-- `make clean`: Remove Cargo and Swift build directories.
-
-## Subsystems
-
-### Wireless file transfer
-Uses the LocalSend v2.1 protocol over local Wi-Fi with mutual TLS. Paired devices pin certificate fingerprints to avoid confirmation dialogs on every transfer. Incorporates an embedded Quick Share receiver so Android devices can share directly from the native system share sheet.
-
-### Wired USB transfer
-Uses a two-tier approach. When USB debugging is active, the pure-Rust ADB client transfers files using Sync v2 with LZ4 compression and ADB burst mode over parallel multiplexed channels. When USB debugging is inactive, the pure-Rust MTP initiator manages file transfers over pipelined bulk USB endpoints. Connected storage appears directly in the macOS Finder sidebar through an FSKit volume extension.
-
-### Screen mirroring and app streaming
-Uses `scrcpy-server` executed on the Android device. The native macOS client decodes hardware H.265 streams via VideoToolbox into IOSurface buffers, which are presented directly by Metal without intermediate CPU copies. Supports independent virtual displays for running individual phone apps in separate macOS windows.
-
-### Continuity and clipboard
-Synchronizes clipboard text and images between macOS and Android. Text synchronizes over the encrypted control channel in under 15 milliseconds. Large images and files use lazy promises on macOS (`NSPasteboardItemDataProvider`) so payload bytes transfer only when the user pastes.
-
-### Continuity camera and microphone
-Feeds phone camera frames into a macOS CoreMediaIO Camera Extension (`CMIOExtension`) and microphone audio into a CoreAudio plug-in. macOS video effects such as Portrait blur and Studio Light function with the stream. The phone camera starts only when a Mac application opens the camera stream and shuts down when the session ends.
-
-## License
-
-Code authored in this repository is licensed under the MIT License or the Apache License, Version 2.0.
+The first plan, written on 11 Nov 2026, reimplemented everything in Rust: its own protocol, Noise encryption, file mounts and a webcam bridge. Testing on a real phone on 18 Nov showed that scrcpy and NearDrop already solved most of it, so the plan was dropped. The Rust crates in `crates/` still build and pass their tests, but no app links them. `ROADMAP.md` has the test results that changed the plan, and the work still to do: notifications, 2FA codes, and the phone camera as a Mac webcam.
